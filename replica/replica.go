@@ -3,12 +3,14 @@ package replica
 import (
 	"encoding/gob"
 	"fmt"
+	"math/rand"
+	"time"
+
 	"github.com/gitferry/bamboo/crypto"
+	"github.com/gitferry/bamboo/execute"
 	"github.com/gitferry/bamboo/limiter"
 	"github.com/gitferry/bamboo/utils"
 	"github.com/kelindar/bitmap"
-	"math/rand"
-	"time"
 
 	"go.uber.org/atomic"
 
@@ -31,6 +33,7 @@ type Replica struct {
 	election.Election
 	sm mempool.SharedMempool
 	pm *pacemaker.Pacemaker
+	ex *execute.Executor
 	//estimator       *Estimator
 	start           chan bool // signal to start the node
 	isStarted       atomic.Bool
@@ -96,6 +99,7 @@ func NewReplica(id identity.NodeID, alg string, isByz bool) *Replica {
 	}
 	r.isByz = isByz
 	r.pm = pacemaker.NewPacemaker(config.GetConfig().N())
+	r.ex = execute.NewExecutor()
 	//r.estimator = NewEstimator()
 	r.start = make(chan bool)
 	r.eventChan = make(chan interface{})
@@ -174,12 +178,13 @@ func (r *Replica) HandleProposal(proposal blockchain.Proposal) {
 	//}
 	r.totalBlockSize += len(proposal.HashList)
 	pendingBlock := r.sm.FillProposal(&proposal)
+	//pendingBlock := r.sm.FillProposalByGroup(&proposal)
 	if config.Configuration.MemType == "ack" {
 		if !r.verifySigs(pendingBlock.Payload.SigMap) {
 			log.Warningf("[%v] received an block %x with invalid sigs for microblocks", r.ID(), proposal.ID)
 		}
 	}
-	block := pendingBlock.CompleteBlock()
+	block := pendingBlock.CompleteBlock() //构建完整区块
 	if block != nil {
 		log.Debugf("[%v] a block is ready, view: %v, id: %x", r.ID(), proposal.View, proposal.ID)
 		r.eventChan <- *block
@@ -333,8 +338,12 @@ func (r *Replica) handleQuery(m message.Query) {
 	//aveRoundTime := float64(r.totalRoundTime.Milliseconds()) / float64(r.roundNo)
 	//aveProposeTime := aveRoundTime - aveProcessTime - aveVoteProcessTime
 	//latency := float64(r.totalDelay.Milliseconds()) / float64(r.latencyNo)
-	r.thrus += fmt.Sprintf("Time: %v s. Throughput: %v txs/s. Delay: %v ms\n",
-		time.Now().Sub(r.startTime).Seconds(), float64(r.totalCommittedTx)/time.Now().Sub(r.tmpTime).Seconds(), float64(r.totalDelay.Milliseconds())/float64(r.latencyNo))
+	r.thrus += fmt.Sprintf("Time: %v s. Throughput: %v txs/s. Delay: %v ms. AVE TxExecuted's Delay: %v ms.\n",
+		time.Now().Sub(r.startTime).Seconds(),
+		float64(r.totalCommittedTx)/time.Now().Sub(r.tmpTime).Seconds(), //tps
+		float64(r.totalDelay.Milliseconds())/float64(r.latencyNo),       //delay
+		r.ex.Delay(),
+	)
 	r.totalCommittedTx = 0
 	r.tmpTime = time.Now()
 	r.totalDelay = 0
@@ -361,13 +370,16 @@ func (r *Replica) handleTxn(m message.Transaction) {
 	r.startSignal()
 	m.Timestamp = time.Now()
 	isbuilt, mb := r.sm.AddTxn(&m)
+
 	if isbuilt {
 		//if config.Configuration.MemType == "time" {
 		//	stableTime := r.estimator.PredictStableTime("mb")
 		//stableTime := time.Duration(0)
-		//log.Debugf("[%v] stable time for a microblock is %v", r.ID(), stableTime)
+
+		//log.Debugf\("[%v] stable time for a microblock is %v", r.ID(), stableTime)
 		//	mb.FutureTimestamp = time.Now().Add(stableTime)
 		//}
+
 		r.txNoInMB = len(mb.Txns)
 		mb.Sender = r.ID()
 		r.sm.AddMicroblock(mb)
@@ -394,8 +406,15 @@ func (r *Replica) handleTxn(m message.Transaction) {
 					r.Send(r.GetCurrentLeader(), mb)
 				} else if config.Configuration.MemType == "ack" {
 					r.MulticastQuorum(r.randomPick(), mb)
+
 				}
 			} else {
+				// log.Debugf("处理微块")
+				// mb1 := *mb
+				// for _, tx := range mb.Txns {
+				// 	tx.Command.Value = make([]byte, 1)
+				// }
+				// r.BroadcastByGroup(mb, &mb1)
 				r.Broadcast(mb)
 			}
 		} else {
@@ -481,6 +500,19 @@ func (r *Replica) randomPick() []identity.NodeID {
 	return pickedNode
 }
 
+//按组广播
+func (r *Replica) pickGroup() []identity.NodeID {
+	//取出对应组的人进行广播
+	n := config.GetConfig().N() - 1 // exluding the master
+	f := 3
+	pick := utils.RandomPick(n, f)
+	pickedNode := make([]identity.NodeID, f)
+	for i, item := range pick {
+		pickedNode[i] = identity.NewNodeID(item + 2)
+	}
+	return pickedNode
+}
+
 func pickRandomNodes(n, d, index int) []identity.NodeID {
 	pick := utils.RandomPick(n-index, d)
 	pickedNode := make([]identity.NodeID, d)
@@ -515,6 +547,8 @@ func (r *Replica) processCommittedBlock(block *blockchain.Block) {
 	r.totalCommittedMBs += len(block.MicroblockList())
 	for _, mb := range block.MicroblockList() {
 		txCount += len(mb.Txns)
+		//***原始逻辑***
+		go r.ex.ExecuteForSerial(mb) //后台执行已提交的微块
 		for _, txn := range mb.Txns {
 			// only record the delay of transactions from the local memory pool
 			delay := time.Now().Sub(txn.Timestamp)
@@ -522,6 +556,8 @@ func (r *Replica) processCommittedBlock(block *blockchain.Block) {
 			r.latencyNo++
 			r.totalCommittedTx++
 		}
+		//*******测试****** 不能当作正式逻辑使用
+		// r.totalCommittedTx++
 		r.totalHops += mb.Hops
 		//err := r.sm.RemoveMicroblock(mb.Hash)
 		//if err != nil {
@@ -704,7 +740,8 @@ func (r *Replica) startSignal() {
 func (r *Replica) Start() {
 	go r.Run()
 	//go r.gossip()
-	go r.loadbalance()
+	go r.loadbalance() //负载均衡用
+
 	// wait for the start signal
 	<-r.start
 	go r.ListenLocalEvent()

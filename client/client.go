@@ -21,7 +21,7 @@ func (d *Database) Stop() error {
 
 func (d *Database) Write(k int, v []byte) error {
 	key := db.Key(k)
-	err := d.Put(key, v)
+	err := d.Put(key, v) //客户端向服务端发起请求
 	return err
 }
 

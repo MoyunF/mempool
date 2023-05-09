@@ -1,10 +1,11 @@
 package socket
 
 import (
-	"github.com/gitferry/bamboo/config"
 	"math/rand"
 	"sync"
 	"time"
+
+	"github.com/gitferry/bamboo/config"
 
 	"github.com/gitferry/bamboo/identity"
 	"github.com/gitferry/bamboo/log"
@@ -23,6 +24,9 @@ type Socket interface {
 
 	// Broadcast send to all peers
 	Broadcast(m interface{})
+
+	// 按组广播
+	BroadcastByGroup(block interface{}, blockWithoutPayload interface{})
 
 	// Recv receives a message
 	Recv() interface{}
@@ -193,6 +197,26 @@ func (s *socket) Broadcast(m interface{}) {
 			continue
 		}
 		s.Send(id, m)
+	}
+	//log.Debugf("node %s done  broadcasting message %+v", s.id, m)
+}
+
+func (s *socket) BroadcastByGroup(block interface{}, blockWithoutPayload interface{}) {
+	//log.Debugf("node %s broadcasting message %+v", s.id, m)
+	i := 0
+	for id := range s.addresses {
+		if id == s.id {
+			continue
+		}
+
+		//给前2个发不带Payload的
+		if i < 2 {
+			log.Debugf("Broadcast without payload to [%v]", id)
+			s.Send(id, blockWithoutPayload)
+		} else {
+			s.Send(id, block)
+		}
+		i++
 	}
 	//log.Debugf("node %s done  broadcasting message %+v", s.id, m)
 }

@@ -3,8 +3,9 @@ package message
 import (
 	"encoding/gob"
 	"fmt"
-	"github.com/gitferry/bamboo/crypto"
 	"time"
+
+	"github.com/gitferry/bamboo/crypto"
 
 	"github.com/gitferry/bamboo/db"
 	"github.com/gitferry/bamboo/identity"

@@ -1,10 +1,11 @@
 package blockchain
 
 import (
-	"github.com/gitferry/bamboo/crypto/merkle"
-	"github.com/kelindar/bitmap"
 	"strconv"
 	"time"
+
+	"github.com/gitferry/bamboo/crypto/merkle"
+	"github.com/kelindar/bitmap"
 
 	"github.com/gitferry/bamboo/crypto"
 	"github.com/gitferry/bamboo/identity"
@@ -139,7 +140,7 @@ func NewMicroblock(proposalID crypto.Identifier, txnList []*message.Transaction)
 	mb.ProposalID = proposalID
 	mb.Txns = txnList
 	mb.Timestamp = time.Now()
-	mb.Hash = mb.hash()
+	mb.Hash = mb.hash() //根据交易生成Hash，但是好像不会验证hhhh
 	return mb
 }
 
@@ -197,7 +198,7 @@ func (pd *PendingBlock) MissingCount() int {
 
 func (pd *PendingBlock) MissingMBList() []crypto.Identifier {
 	missingList := make([]crypto.Identifier, 0)
-	for k, _ := range pd.MissingMap {
+	for k := range pd.MissingMap {
 		missingList = append(missingList, k)
 	}
 	return missingList

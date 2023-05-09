@@ -42,6 +42,7 @@ func main() {
 			isByz := false
 			if id.Node() <= config.GetConfig().ByzNo {
 				isByz = true
+				log.Info("server %v is byz", id)
 			}
 			go initReplica(id, isByz)
 		}

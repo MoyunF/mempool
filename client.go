@@ -4,11 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"github.com/gitferry/bamboo/config"
-	"github.com/gitferry/bamboo/db"
-	"github.com/gitferry/bamboo/identity"
-	"github.com/gitferry/bamboo/log"
-	"github.com/gitferry/bamboo/node"
 	"io"
 	"io/ioutil"
 	"math/rand"
@@ -16,6 +11,12 @@ import (
 	"net/http/httputil"
 	"strconv"
 	"sync"
+
+	"github.com/gitferry/bamboo/config"
+	"github.com/gitferry/bamboo/db"
+	"github.com/gitferry/bamboo/identity"
+	"github.com/gitferry/bamboo/log"
+	"github.com/gitferry/bamboo/node"
 )
 
 // Client interface provides get and put for key value store
@@ -98,6 +99,7 @@ func (c *HTTPClient) GetURL(key db.Key) (identity.NodeID, string) {
 		replicaID = c.ids[rand.Intn(len(c.ids))]
 	}
 	log.Debugf("send tx to %v", replicaID)
+	log.Debugf("%v", c.HTTP[replicaID]+"/"+strconv.Itoa(int(key)))
 	return replicaID, c.HTTP[replicaID] + "/" + strconv.Itoa(int(key))
 }
 
@@ -106,6 +108,7 @@ func (c *HTTPClient) GetURL(key db.Key) (identity.NodeID, string) {
 func (c *HTTPClient) rest(url string, value db.Value) error {
 	method := http.MethodGet
 	var body io.Reader
+	log.Debugf("%v", value)
 	if value != nil {
 		method = http.MethodPut
 		body = bytes.NewBuffer(value)

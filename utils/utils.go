@@ -4,12 +4,13 @@ import (
 	"bytes"
 	"encoding/gob"
 	"fmt"
-	"github.com/kelindar/bitmap"
 	"math/rand"
 	"net"
 	"reflect"
 	"strconv"
 	"time"
+
+	"github.com/kelindar/bitmap"
 
 	"github.com/gitferry/bamboo/config"
 	"github.com/gitferry/bamboo/crypto"
@@ -67,7 +68,9 @@ func BitmapToNodes(bm bitmap.Bitmap) []identity.NodeID {
 	return nodes
 }
 
+//n个中选出f个
 func RandomPick(n int, f int) []int {
+
 	var randomPick []int
 	for i := 0; i < f; i++ {
 		var randomID int

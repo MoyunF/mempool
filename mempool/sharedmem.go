@@ -32,6 +32,9 @@ type SharedMempool interface {
 	// return missing list if there's any
 	FillProposal(p *blockchain.Proposal) *blockchain.PendingBlock
 
+	// FillProposal pulls microblocks from the mempool and build a pending block,
+	// return missing list if there's any
+	FillProposalByGroup(p *blockchain.Proposal) *blockchain.PendingBlock
 	AddAck(ack *blockchain.Ack)
 
 	IsStable(id crypto.Identifier) bool

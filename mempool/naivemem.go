@@ -3,13 +3,14 @@ package mempool
 import (
 	"container/list"
 	"fmt"
+	"sync"
+
 	"github.com/gitferry/bamboo/blockchain"
 	"github.com/gitferry/bamboo/config"
 	"github.com/gitferry/bamboo/crypto"
 	"github.com/gitferry/bamboo/identity"
 	"github.com/gitferry/bamboo/message"
 	"github.com/gitferry/bamboo/utils"
-	"sync"
 )
 
 type NaiveMem struct {
@@ -157,6 +158,33 @@ func (nm *NaiveMem) FindMicroblock(id crypto.Identifier) (bool, *blockchain.Micr
 // a pending block should include the proposal, micorblocks that already exist,
 // and a missing list if there's any
 func (nm *NaiveMem) FillProposal(p *blockchain.Proposal) *blockchain.PendingBlock {
+	nm.mu.Lock()
+	defer nm.mu.Unlock()
+	existingBlocks := make([]*blockchain.MicroBlock, 0)
+	missingBlocks := make(map[crypto.Identifier]struct{}, 0)
+	for _, id := range p.HashList {
+		block, found := nm.microblockMap[id]
+		if found {
+			existingBlocks = append(existingBlocks, block)
+			for e := nm.microblocks.Front(); e != nil; e = e.Next() {
+				// do something with e.Value
+				mb := e.Value.(*blockchain.MicroBlock)
+				if mb == block {
+					nm.microblocks.Remove(e)
+					break
+				}
+			}
+		} else {
+			missingBlocks[id] = struct{}{}
+		}
+	}
+	return blockchain.NewPendingBlock(p, missingBlocks, existingBlocks)
+}
+
+// FillProposal pulls microblocks from the mempool and build a pending block,
+// a pending block should include the proposal, micorblocks that already exist,
+// and a missing list if there's any
+func (nm *NaiveMem) FillProposalByGroup(p *blockchain.Proposal) *blockchain.PendingBlock {
 	nm.mu.Lock()
 	defer nm.mu.Unlock()
 	existingBlocks := make([]*blockchain.MicroBlock, 0)

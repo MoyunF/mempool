@@ -1,15 +1,19 @@
 package node
 
 import (
-	"github.com/gitferry/bamboo/config"
-	"github.com/gitferry/bamboo/log"
-	"github.com/gitferry/bamboo/message"
+	"encoding/json"
 	"io"
 	"io/ioutil"
 	"math/rand"
 	"net/http"
 	"net/url"
 	"time"
+
+	"github.com/gitferry/bamboo/blockchain"
+	"github.com/gitferry/bamboo/config"
+	"github.com/gitferry/bamboo/execute"
+	"github.com/gitferry/bamboo/log"
+	"github.com/gitferry/bamboo/message"
 )
 
 // http request header names
@@ -17,6 +21,11 @@ const (
 	HTTPClientID  = "Id"
 	HTTPCommandID = "Cid"
 )
+
+type Tx struct {
+	From string
+	To   string
+}
 
 // serve serves the http REST API request from clients
 func (n *node) http() {
@@ -26,6 +35,7 @@ func (n *node) http() {
 	mux.HandleFunc("/slow", n.handleSlow)
 	mux.HandleFunc("/flaky", n.handleFlaky)
 	mux.HandleFunc("/crash", n.handleCrash)
+	mux.HandleFunc("/tx", n.handleTx)
 
 	// http string should be in form of ":8080"
 	ip, err := url.Parse(config.Configuration.HTTPAddrs[n.id])
@@ -63,7 +73,8 @@ func (n *node) handleRoot(w http.ResponseWriter, r *http.Request) {
 	req.Timestamp = time.Now()
 	req.ID = r.RequestURI
 	n.TxChan <- req
-
+	log.Debugf("%v", v)
+	log.Debugf("from: %v to: %v", v)
 	//reply := <-req.C
 	//
 	//log.Debugf("[%v] tx %v delay is %v", n.id, req.Hash, strconv.Itoa(int(reply.Delay.Nanoseconds())))
@@ -77,6 +88,28 @@ func (n *node) handleRoot(w http.ResponseWriter, r *http.Request) {
 	//if err != nil {
 	//	log.Error(err)
 	//}
+}
+
+func (n *node) handleTx(w http.ResponseWriter, r *http.Request) {
+	var req message.Transaction
+	defer r.Body.Close()
+
+	v, _ := ioutil.ReadAll(r.Body)
+	tx := Tx{}
+	err := json.Unmarshal(v, &tx)
+	if err != nil {
+		log.Debugf("err : %v", err)
+	}
+	req.Command.Value = v
+	req.NodeID = n.id
+	req.Timestamp = time.Now()
+	req.ID = r.RequestURI
+	//n.TxChan <- req
+
+	test_mb := new(blockchain.MicroBlock)
+	test_mb.Txns = append(test_mb.Txns, &req)
+	execute := execute.NewExecutor()
+	execute.ExecuteForParallel(test_mb)
 }
 
 func (n *node) handleCrash(w http.ResponseWriter, r *http.Request) {

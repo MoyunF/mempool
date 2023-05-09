@@ -2,13 +2,14 @@ package mempool
 
 import (
 	"container/list"
+	"sync"
+
 	"github.com/gitferry/bamboo/blockchain"
 	"github.com/gitferry/bamboo/config"
 	"github.com/gitferry/bamboo/crypto"
 	"github.com/gitferry/bamboo/identity"
 	"github.com/gitferry/bamboo/message"
 	"github.com/gitferry/bamboo/utils"
-	"sync"
 )
 
 type AckMem struct {
@@ -107,6 +108,7 @@ func (am *AckMem) AddMicroblock(mb *blockchain.MicroBlock) error {
 	if exists {
 		return nil
 	}
+	//pm容器，用来判断谁给这个微块发送了ack
 	pm := &PendingMicroblock{
 		microblock: mb,
 		ackMap:     make(map[identity.NodeID]struct{}),
@@ -239,6 +241,7 @@ func (am *AckMem) FindMicroblock(id crypto.Identifier) (bool, *blockchain.MicroB
 // FillProposal pulls microblocks from the mempool and build a pending block,
 // a pending block should include the proposal, micorblocks that already exist,
 // and a missing list if there's any
+//接受Proposal后，会通过fillProposal来获取丢失的微块
 func (am *AckMem) FillProposal(p *blockchain.Proposal) *blockchain.PendingBlock {
 	am.mu.Lock()
 	defer am.mu.Unlock()
@@ -266,6 +269,42 @@ func (am *AckMem) FillProposal(p *blockchain.Proposal) *blockchain.PendingBlock 
 		}
 		if !found {
 			missingBlocks[id] = struct{}{}
+		}
+	}
+	return blockchain.NewPendingBlock(p, missingBlocks, existingBlocks)
+}
+
+// FillProposal pulls microblocks from the mempool and build a pending block,
+// a pending block should include the proposal, micorblocks that already exist,
+// and a missing list if there's any
+//只获取自己组的区块
+func (am *AckMem) FillProposalByGroup(p *blockchain.Proposal) *blockchain.PendingBlock {
+	am.mu.Lock()
+	defer am.mu.Unlock()
+	existingBlocks := make([]*blockchain.MicroBlock, 0)
+	missingBlocks := make(map[crypto.Identifier]struct{}, 0)
+	for _, id := range p.HashList {
+		found := false
+		_, exists := am.pendingMicroblocks[id]
+		if exists {
+			found = true
+			existingBlocks = append(existingBlocks, am.pendingMicroblocks[id].microblock)
+			delete(am.pendingMicroblocks, id)
+			//log.Debugf("microblock id: %x is deleted from pending when filling", id)
+		}
+		for e := am.stableMicroblocks.Front(); e != nil; e = e.Next() {
+			// do something with e.Value
+			mb := e.Value.(*blockchain.MicroBlock)
+			if mb.Hash == id {
+				existingBlocks = append(existingBlocks, mb)
+				found = true
+				am.stableMicroblocks.Remove(e)
+				//log.Debugf("microblock id: %x is deleted from stable when filling", mb.Hash)
+				break
+			}
+		}
+		if !found {
+			// missingBlocks[id] = struct{}{}
 		}
 	}
 	return blockchain.NewPendingBlock(p, missingBlocks, existingBlocks)

@@ -37,13 +37,12 @@ func (f *FakeDB) Read(key int) (int, error) {
 	return 0, nil
 }
 
-func (f *FakeDB) Write(key, value int) error {
+func (f *FakeDB) Write(key int, value []byte) error {
 	//log.Debugf("Write %d", key)
 	f.lock.Lock()
 	f.total++
 	if key >= f.start && key <= f.end {
 		f.local++
-
 	}
 	f.lock.Unlock()
 	return nil
@@ -65,7 +64,7 @@ func TestBenchmark(t *testing.T) {
 	b.Sigma = 50
 	b.T = 0
 	b.N = 10000
-	b.LinearizabilityCheck = false
+	//b.LinearizabilityCheck = false
 
 	b.Run()
 }

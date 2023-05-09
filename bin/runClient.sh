@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 
 go build ../client/
-int=1
-while (( $int<=$1 ))
-do
+# int=1
+# while [ $int -lt  ]
+# do
+# ./client&
+# let "int++"
+# done
 ./client&
-let "int++"
-done
-echo "$1 clients are started"
+./client&
+./client&
+./client&
+echo "1 clients are started"
