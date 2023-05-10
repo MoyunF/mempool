@@ -338,11 +338,11 @@ func (r *Replica) handleQuery(m message.Query) {
 	//aveRoundTime := float64(r.totalRoundTime.Milliseconds()) / float64(r.roundNo)
 	//aveProposeTime := aveRoundTime - aveProcessTime - aveVoteProcessTime
 	//latency := float64(r.totalDelay.Milliseconds()) / float64(r.latencyNo)
-	r.thrus += fmt.Sprintf("Time: %v s. Throughput: %v txs/s. Delay: %v ms. AVE TxExecuted's Delay: %v ms.\n",
+	r.thrus += fmt.Sprintf("Time: %v s. Throughput: %v txs/s. Delay: %v ms. Ave TxExecuted's Delay: %v ms.\n",
 		time.Now().Sub(r.startTime).Seconds(),
 		float64(r.totalCommittedTx)/time.Now().Sub(r.tmpTime).Seconds(), //tps
 		float64(r.totalDelay.Milliseconds())/float64(r.latencyNo),       //delay
-		r.ex.Delay(),
+		r.ex.Delay(), //执行时延
 	)
 	r.totalCommittedTx = 0
 	r.tmpTime = time.Now()
