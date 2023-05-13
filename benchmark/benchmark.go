@@ -123,6 +123,7 @@ func (b *Benchmark) worker(keys <-chan int, result chan<- time.Duration) {
 		//s = time.Now()
 		value := make([]byte, config.GetConfig().PayloadSize)
 		rand.Read(value)
+		//straus 2023 icde niujianyu
 		//rand.Read(value)
 		_ = b.db.Write(k, value)
 		//res, err := strconv.Atoi(r)

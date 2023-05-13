@@ -8,6 +8,7 @@ import (
 	"github.com/gitferry/bamboo/config"
 	"github.com/gitferry/bamboo/crypto"
 	"github.com/gitferry/bamboo/identity"
+	"github.com/gitferry/bamboo/log"
 	"github.com/gitferry/bamboo/message"
 	"github.com/gitferry/bamboo/utils"
 )
@@ -55,11 +56,11 @@ func NewAckMem() *AckMem {
 func (am *AckMem) AddTxn(txn *message.Transaction) (bool, *blockchain.MicroBlock) {
 	// mempool is full
 	if am.RemainingTx() >= int64(am.memsize) {
-		//log.Warningf("mempool's tx list is full")
+		log.Warningf("mempool's tx list is full")
 		return false, nil
 	}
 	if am.RemainingMB() >= int64(am.memsize) {
-		//log.Warningf("mempool's mb is full")
+		log.Warningf("mempool's mb is full")
 		return false, nil
 	}
 	am.totalTx++
@@ -77,6 +78,7 @@ func (am *AckMem) AddTxn(txn *message.Transaction) (bool, *blockchain.MicroBlock
 		//set the currSize to curr trans, since it is the only one does not add to the microblock
 		var id crypto.Identifier
 		am.currSize = tranSize
+		log.Debugf("totalSize :%v > am.msize:%v generate mb", totalSize, am.msize)
 		newBlock := blockchain.NewMicroblock(id, am.makeTxnSlice())
 		am.txnList.PushBack(txn)
 		return true, newBlock
@@ -129,7 +131,7 @@ func (am *AckMem) AddMicroblock(mb *blockchain.MicroBlock) error {
 				am.stableMicroblocks.PushBack(mb)
 				am.stableMBs[mb.Hash] = struct{}{}
 				delete(am.pendingMicroblocks, mb.Hash)
-				//log.Debugf("microblock id: %x becomes stable from buffer", mb.Hash)
+				log.Debugf("microblock id: %x becomes stable from buffer", mb.Hash)
 			}
 		} else {
 			am.pendingMicroblocks[mb.Hash] = pm
@@ -144,6 +146,7 @@ func (am *AckMem) AddMicroblock(mb *blockchain.MicroBlock) error {
 func (am *AckMem) AddAck(ack *blockchain.Ack) {
 	am.mu.Lock()
 	defer am.mu.Unlock()
+	log.Debugf("receive ack for mb id:%v", ack.MicroblockID)
 	target, received := am.pendingMicroblocks[ack.MicroblockID]
 	//check if the ack arrives before the microblock
 	if received {
@@ -152,12 +155,14 @@ func (am *AckMem) AddAck(ack *blockchain.Ack) {
 			if _, exists := am.stableMBs[target.microblock.Hash]; !exists {
 				am.stableMicroblocks.PushBack(target.microblock)
 				am.stableMBs[target.microblock.Hash] = struct{}{}
+				log.Debugf("push a stableMb id:%v", target.microblock)
 				delete(am.pendingMicroblocks, ack.MicroblockID)
 			}
 		}
 	} else {
 		//ack arrives before microblock, record the number of ack received before microblock
 		//let the addMicroblock do the rest.
+		log.Debugf("receive ack for mb : %v before mb", ack.MicroblockID)
 		_, exist := am.ackBuffer[ack.MicroblockID]
 		if exist {
 			am.ackBuffer[ack.MicroblockID][ack.Receiver] = ack.Signature
@@ -189,7 +194,7 @@ func (am *AckMem) GeneratePayload() *blockchain.Payload {
 		if mb == nil {
 			break
 		}
-		//log.Debugf("microblock id: %x is deleted from mempool when proposing", mb.Hash)
+		log.Debugf("microblock id: %x is deleted from mempool when proposing", mb.Hash)
 		microblockList = append(microblockList, mb)
 
 		sigs := make(map[identity.NodeID]crypto.Signature, 0)
@@ -203,7 +208,7 @@ func (am *AckMem) GeneratePayload() *blockchain.Payload {
 		}
 		sigMap[mb.Hash] = sigs
 	}
-
+	log.Debugf("generate payload, len: %v", len(microblockList))
 	return blockchain.NewPayload(microblockList, sigMap)
 }
 
@@ -277,6 +282,43 @@ func (am *AckMem) FillProposal(p *blockchain.Proposal) *blockchain.PendingBlock 
 // FillProposal pulls microblocks from the mempool and build a pending block,
 // a pending block should include the proposal, micorblocks that already exist,
 // and a missing list if there's any
+//payload包含收到的和没收到的mb
+func (am *AckMem) FillProposalFromGroup(p *blockchain.Proposal) *blockchain.PendingBlock {
+	am.mu.Lock()
+	defer am.mu.Unlock()
+	existingBlocks := make([]*blockchain.MicroBlock, 0)
+	missingBlocks := make(map[crypto.Identifier]struct{}, 0)
+	for _, id := range p.HashList {
+		found := false
+		_, exists := am.pendingMicroblocks[id]
+		if exists {
+			found = true
+			existingBlocks = append(existingBlocks, am.pendingMicroblocks[id].microblock)
+			delete(am.pendingMicroblocks, id)
+			//log.Debugf("microblock id: %x is deleted from pending when filling", id)
+		}
+		for e := am.stableMicroblocks.Front(); e != nil; e = e.Next() {
+			// do something with e.Value
+			mb := e.Value.(*blockchain.MicroBlock)
+			if mb.Hash == id {
+				existingBlocks = append(existingBlocks, mb)
+				found = true
+				am.stableMicroblocks.Remove(e)
+				//log.Debugf("microblock id: %x is deleted from stable when filling", mb.Hash)
+				break
+			}
+		}
+		if !found {
+			//没找到的加一个假微块进来
+			// pendingMb :=
+		}
+	}
+	return blockchain.NewPendingBlock(p, missingBlocks, existingBlocks)
+}
+
+// FillProposal pulls microblocks from the mempool and build a pending block,
+// a pending block should include the proposal, micorblocks that already exist,
+// and a missing list if there's any
 //只获取自己组的区块
 func (am *AckMem) FillProposalByGroup(p *blockchain.Proposal) *blockchain.PendingBlock {
 	am.mu.Lock()
@@ -332,6 +374,18 @@ func (am *AckMem) TotalMB() int64 {
 	am.mu.Lock()
 	defer am.mu.Unlock()
 	return int64(len(am.microblockMap))
+}
+
+func (am *AckMem) StableMB() int64 {
+	am.mu.Lock()
+	defer am.mu.Unlock()
+	return int64(am.stableMicroblocks.Len())
+}
+
+func (am *AckMem) PendingMB() int64 {
+	am.mu.Lock()
+	defer am.mu.Unlock()
+	return int64(len(am.pendingMicroblocks))
 }
 
 func (am *AckMem) RemainingMB() int64 {

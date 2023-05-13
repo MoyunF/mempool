@@ -73,8 +73,7 @@ func (n *node) handleRoot(w http.ResponseWriter, r *http.Request) {
 	req.Timestamp = time.Now()
 	req.ID = r.RequestURI
 	n.TxChan <- req
-	log.Debugf("%v", v)
-	log.Debugf("from: %v to: %v", v)
+	log.Debugf("receive tx")
 	//reply := <-req.C
 	//
 	//log.Debugf("[%v] tx %v delay is %v", n.id, req.Hash, strconv.Itoa(int(reply.Delay.Nanoseconds())))

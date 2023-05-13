@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/gitferry/bamboo/crypto/merkle"
+	"github.com/gitferry/bamboo/group"
+	"github.com/gitferry/bamboo/log"
 	"github.com/kelindar/bitmap"
 
 	"github.com/gitferry/bamboo/crypto"
@@ -36,6 +38,7 @@ type Payload struct {
 
 type MicroBlock struct {
 	ProposalID      crypto.Identifier
+	GroupId         int //add by lxx 代表mb要被发送的执行组是什么
 	Hash            crypto.Identifier
 	Txns            []*message.Transaction
 	Timestamp       time.Time
@@ -127,7 +130,7 @@ func (mb *MicroBlock) AddSentNodes(nodes []identity.NodeID) {
 	}
 }
 
-// BuildBlock fills microblocks to make a block
+// BuildBlock fills microblocks to make a block,
 func BuildBlock(proposal *Proposal, payload *Payload) *Block {
 	return &Block{
 		BlockHeader: proposal.BlockHeader,
@@ -135,12 +138,23 @@ func BuildBlock(proposal *Proposal, payload *Payload) *Block {
 	}
 }
 
+// // 构建区块，包括一些没有收到的微块
+// func BuildBlockWithPending(proposal *Proposal, payload *Payload) *Block {
+
+// 	return &Block{
+// 		BlockHeader: proposal.BlockHeader,
+// 		payload:     payload,
+// 	}
+// }
+
 func NewMicroblock(proposalID crypto.Identifier, txnList []*message.Transaction) *MicroBlock {
+	log.Debugf("make a new mb, txs len: %v", len(txnList))
 	mb := new(MicroBlock)
 	mb.ProposalID = proposalID
 	mb.Txns = txnList
 	mb.Timestamp = time.Now()
-	mb.Hash = mb.hash() //根据交易生成Hash，但是好像不会验证hhhh
+	mb.Hash = mb.hash()                        //根据交易生成Hash，但是好像不会验证hhhh
+	mb.GroupId = group.GenerateGroupIdByRand() //为mb增加group id
 	return mb
 }
 

@@ -26,7 +26,7 @@ type Socket interface {
 	Broadcast(m interface{})
 
 	// 按组广播
-	BroadcastByGroup(block interface{}, blockWithoutPayload interface{})
+	BroadcastByGroup(block interface{}, blockWithoutPayload interface{}, memberList map[identity.NodeID]struct{})
 
 	// Recv receives a message
 	Recv() interface{}
@@ -191,34 +191,33 @@ func (s *socket) MulticastQuorum(nodes []identity.NodeID, m interface{}) {
 }
 
 func (s *socket) Broadcast(m interface{}) {
-	//log.Debugf("node %s broadcasting message %+v", s.id, m)
+	log.Debugf("node %s broadcasting message %+v", s.id, m)
 	for id := range s.addresses {
 		if id == s.id {
 			continue
 		}
 		s.Send(id, m)
 	}
-	//log.Debugf("node %s done  broadcasting message %+v", s.id, m)
+	log.Debugf("node %s done  broadcasting message %+v", s.id, m)
 }
 
-func (s *socket) BroadcastByGroup(block interface{}, blockWithoutPayload interface{}) {
-	//log.Debugf("node %s broadcasting message %+v", s.id, m)
-	i := 0
+func (s *socket) BroadcastByGroup(block interface{}, blockWithoutPayload interface{}, memberList map[identity.NodeID]struct{}) {
+	log.Debugf("node %s broadcasting message by group %+v", s.id, block)
 	for id := range s.addresses {
 		if id == s.id {
 			continue
 		}
 
 		//给前2个发不带Payload的
-		if i < 2 {
-			log.Debugf("Broadcast without payload to [%v]", id)
+		if _, ok := memberList[id]; !ok {
+			log.Debugf("[%v] is not in group", id)
 			s.Send(id, blockWithoutPayload)
 		} else {
+			log.Debugf("[%v] is in group", id)
 			s.Send(id, block)
 		}
-		i++
 	}
-	//log.Debugf("node %s done  broadcasting message %+v", s.id, m)
+	log.Debugf("node %s done  broadcasting message by group %+v", s.id, block)
 }
 
 func (s *socket) Close() {

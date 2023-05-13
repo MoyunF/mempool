@@ -181,6 +181,30 @@ func (nm *NaiveMem) FillProposal(p *blockchain.Proposal) *blockchain.PendingBloc
 	return blockchain.NewPendingBlock(p, missingBlocks, existingBlocks)
 }
 
+func (nm *NaiveMem) FillProposalFromGroup(p *blockchain.Proposal) *blockchain.PendingBlock {
+	nm.mu.Lock()
+	defer nm.mu.Unlock()
+	existingBlocks := make([]*blockchain.MicroBlock, 0)
+	missingBlocks := make(map[crypto.Identifier]struct{}, 0)
+	for _, id := range p.HashList {
+		block, found := nm.microblockMap[id]
+		if found {
+			existingBlocks = append(existingBlocks, block)
+			for e := nm.microblocks.Front(); e != nil; e = e.Next() {
+				// do something with e.Value
+				mb := e.Value.(*blockchain.MicroBlock)
+				if mb == block {
+					nm.microblocks.Remove(e)
+					break
+				}
+			}
+		} else {
+			missingBlocks[id] = struct{}{}
+		}
+	}
+	return blockchain.NewPendingBlock(p, missingBlocks, existingBlocks)
+}
+
 // FillProposal pulls microblocks from the mempool and build a pending block,
 // a pending block should include the proposal, micorblocks that already exist,
 // and a missing list if there's any
@@ -228,6 +252,12 @@ func (nm *NaiveMem) RemainingMB() int64 {
 	return int64(nm.microblocks.Len())
 }
 
+func (nm *NaiveMem) StableMB() int64 {
+	return 0
+}
+func (nm *NaiveMem) PendingMB() int64 {
+	return 0
+}
 func (nm *NaiveMem) AddAck(ack *blockchain.Ack) {
 }
 

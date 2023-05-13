@@ -34,6 +34,10 @@ type SharedMempool interface {
 
 	// FillProposal pulls microblocks from the mempool and build a pending block,
 	// return missing list if there's any
+	FillProposalFromGroup(p *blockchain.Proposal) *blockchain.PendingBlock
+
+	// FillProposal pulls microblocks from the mempool and build a pending block,
+	// return missing list if there's any
 	FillProposalByGroup(p *blockchain.Proposal) *blockchain.PendingBlock
 	AddAck(ack *blockchain.Ack)
 
@@ -48,4 +52,8 @@ type SharedMempool interface {
 	TotalMB() int64
 
 	RemainingMB() int64
+
+	StableMB() int64
+
+	PendingMB() int64
 }

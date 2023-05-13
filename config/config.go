@@ -25,47 +25,48 @@ type Config struct {
 	Policy    string  `json:"policy"`    // leader change policy {consecutive, majority}
 	Threshold float64 `json:"threshold"` // threshold for policy in WPaxos {n consecutive or time interval in ms}
 
-	Thrifty        bool            `json:"thrifty"`          // only send messages to a quorum
-	BufferSize     int             `json:"buffer_size"`      // buffer size for maps
-	ChanBufferSize int             `json:"chan_buffer_size"` // buffer size for channels
-	MultiVersion   bool            `json:"multiversion"`     // create multi-version database
-	Timeout        int             `json:"timeout"`
-	ByzNo          int             `json:"byzNo"`
-	BSize          int             `json:"bsize"` // max number of microblock contained in a block
-	MSize          int             `json:"msize"` // byte size of a microblock
-	Fixed          bool            `json:"fixed"`
-	Benchmark      Bconfig         `json:"benchmark"` // benchmark configuration
-	Delta          int             `json:"delta"`     // timeout, seconds
-	Pprof          bool            `json:"pprof"`
-	MaxRound       int             `json:"maxRound"`
-	Strategy       string          `json:"strategy"`
-	ProposeTime    int             `json:"propose_time"`
-	PayloadSize    int             `json:"payload_size"`
-	Master         identity.NodeID `json:"master"`
-	Delay          int             `json:"delay"`   // transmission delay in ms
-	DErr           int             `json:"derr"`    // the err taken into delays
-	MemSize        int             `json:"memsize"` // max number of microblocks in the mempool
-	Slow           int             `json:"slow"`
-	Crash          int             `json:"crash"`
-	MemType        string          `json:"mem_type"`
-	EstimateNum    int             `json:"estimate_num"`
-	EstimateWindow int             `json:"estimate_window"`
-	DefaultDelay   int             `json:"default_delay"`
-	Gossip         bool            `json:"gossip"`
-	Fanout         int             `json:"fanout"`
-	SlowFanout     int             `json:"slow_fanout"`
-	FillInterval   int             `json:"fillInterval"`
-	Capacity       int             `json:"capacity"`
-	P              int             `json:"p"`
-	SlowNo         int             `json:"slow_no"`
-	Q              int             `json:"q"` // the number of acks to be considered stable
-	R              int             `json:"r"` // max hops of gossip
-	Zipf           bool            `json:"zipf"`
-	Opt            bool            `json:"opt"`
-	LoadBalance    bool            `json:"load_balance"`
-	LoadedIndex    int             `json:"loaded_index"`
-	ForwardP       int             `json:"forward_p"`
-	D              int             `json:"d"`
+	Thrifty          bool            `json:"thrifty"`          // only send messages to a quorum
+	BufferSize       int             `json:"buffer_size"`      // buffer size for maps
+	ChanBufferSize   int             `json:"chan_buffer_size"` // buffer size for channels
+	MultiVersion     bool            `json:"multiversion"`     // create multi-version database
+	Timeout          int             `json:"timeout"`
+	ByzNo            int             `json:"byzNo"`
+	BSize            int             `json:"bsize"` // max number of microblock contained in a block
+	MSize            int             `json:"msize"` // byte size of a microblock
+	Fixed            bool            `json:"fixed"`
+	Benchmark        Bconfig         `json:"benchmark"` // benchmark configuration
+	Delta            int             `json:"delta"`     // timeout, seconds
+	Pprof            bool            `json:"pprof"`
+	MaxRound         int             `json:"maxRound"`
+	Strategy         string          `json:"strategy"`
+	ProposeTime      int             `json:"propose_time"`
+	PayloadSize      int             `json:"payload_size"`
+	Master           identity.NodeID `json:"master"`
+	Delay            int             `json:"delay"`   // transmission delay in ms
+	DErr             int             `json:"derr"`    // the err taken into delays
+	MemSize          int             `json:"memsize"` // max number of microblocks in the mempool
+	Slow             int             `json:"slow"`
+	Crash            int             `json:"crash"`
+	MemType          string          `json:"mem_type"`
+	EstimateNum      int             `json:"estimate_num"`
+	EstimateWindow   int             `json:"estimate_window"`
+	DefaultDelay     int             `json:"default_delay"`
+	Gossip           bool            `json:"gossip"`
+	Fanout           int             `json:"fanout"`
+	SlowFanout       int             `json:"slow_fanout"`
+	FillInterval     int             `json:"fillInterval"`
+	Capacity         int             `json:"capacity"`
+	P                int             `json:"p"`
+	SlowNo           int             `json:"slow_no"`
+	Q                int             `json:"q"` // the number of acks to be considered stable
+	R                int             `json:"r"` // max hops of gossip
+	Zipf             bool            `json:"zipf"`
+	Opt              bool            `json:"opt"`
+	LoadBalance      bool            `json:"load_balance"`
+	LoadedIndex      int             `json:"loaded_index"`
+	ForwardP         int             `json:"forward_p"`
+	D                int             `json:"d"`
+	BroadcastByGroup bool            `json:"broadcastBygroup"`
 
 	// zipfian distribution
 	ZipfianS float64 `json:"zipfian_s"` // zipfian s parameter
@@ -82,6 +83,11 @@ type Config struct {
 	n int // total number of nodes
 	//z   int         // total number of zones
 	//npz map[int]int // nodes per zone
+
+	//分组
+
+	GroupNum  int `json:"groupNum"`  //有多少分组
+	MemberNum int `json:"memberNum"` //分组中成员的数量 2f+1
 }
 
 //var keys []crypto.PrivateKey
