@@ -2,5 +2,6 @@
 
 
 ./client&
+./client&
 
-echo "1 clients are started"
+echo "2 clients are started"
