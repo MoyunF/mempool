@@ -50,14 +50,15 @@ type ExecuteResult struct {
 	PropsalId identity.NodeID  //广播者的id
 	Sig       crypto.Signature //广播者的签名
 	Mb        mbHash           //执行成功的块hash
+	No        int              //微块顺序
 	Result    string           //区块执行后的状态
 }
 
 //区块执行队列
 type mbList struct {
-	mbs   []*blockchain.MicroBlock                        //执行队列
-	done  map[mbHash]map[identity.NodeID]crypto.Signature //mb key：mbHash value：确认的人的签名
-	table map[mbHash]*blockchain.MicroBlock               //mb在list中的位置
+	mbs   []*blockchain.MicroBlock                     //执行队列
+	done  map[int]map[identity.NodeID]crypto.Signature //mb key：微块的顺序从1开始 value：确认的人的签名
+	table map[mbHash]*blockchain.MicroBlock            //mb在list中的位置
 }
 
 func (e *Executor) HandleMB() {
@@ -86,25 +87,25 @@ func (e *Executor) AddMbToExecute(mb []*blockchain.MicroBlock) {
 	e.lock.Lock()
 	defer e.lock.Unlock()
 
-	log.Debugf("有%v个微块准备添加给执行队列", len(mb))
+	log.Debugf("有%v个微块添加给执行队列", len(mb))
+
+	e.mbPending.mbs = append(e.mbPending.mbs, mb...)
+	log.Debugf("添加mb到执行队列,队列长度：%v", len(e.mbPending.mbs))
+
 	done_index := -1
-	for index, v := range mb {
+	for index, v := range e.mbPending.mbs {
 		if e.CheckResult(v) == true {
 			done_index = index
 			continue
 		}
 	}
 	if done_index != -1 {
+		log.Debugf("处理一下之前缓存的result")
 		for i := 0; i <= done_index; i++ {
-			e.updateState(mb[i])
+			e.updateState(e.mbPending.mbs[0])
+			e.mbPending.mbs = e.mbPending.mbs[1:]
 		}
-		mb = mb[done_index+1:]
 	}
-
-	log.Debugf("预处理后，%v之前的微块已经被执行过了，添加%v个微块给执行队列", done_index, len(mb))
-
-	e.mbPending.mbs = append(e.mbPending.mbs, mb...)
-	log.Debugf("添加mb到执行队列,队列长度：%v", len(e.mbPending.mbs))
 	// for _, mb := range e.mbPending.mbs {
 	// 	if !mb.IsFake && e.gm.IsInMyGroup(mb.GroupId) {
 	// 		log.Debugf("在执行组中 组：%v", mb.GroupId)
@@ -118,7 +119,7 @@ func (e *Executor) AddMbToExecute(mb []*blockchain.MicroBlock) {
 func (e *Executor) ExecuteThread() { //表示是有一个mb被成功执行
 	var lastmb *blockchain.MicroBlock = nil
 	e.ShowQueueStatus()
-	for index, mb := range e.mbPending.mbs {
+	for _, mb := range e.mbPending.mbs {
 		if e.gm.IsInMyGroup(mb.GroupId) {
 			if mb.IsFake == true {
 				//请求重传
@@ -139,7 +140,7 @@ func (e *Executor) ExecuteThread() { //表示是有一个mb被成功执行
 				e.mbPending.mbs = e.mbPending.mbs[1:]
 			}
 		} else {
-			log.Debugf("当前%v的队头节点是%v分组负责，无法执行", index, mb.GroupId)
+			log.Debugf("当前队头任务%v是%v分组负责，无法执行", mb.Hash, mb.GroupId)
 			break
 		}
 	}
@@ -152,11 +153,15 @@ func (e *Executor) ExecuteThread() { //表示是有一个mb被成功执行
 			for i := 0; i < 200; i++ {
 				fakestate += "0x112312912480:32"
 			}
-			result := &ExecuteResult{PropsalId: e.node.ID(), Sig: sig, Mb: mbHash(lastmb.Hash), Result: fakestate}
+			result := &ExecuteResult{PropsalId: e.node.ID(), Sig: sig,
+				Mb:     mbHash(lastmb.Hash),
+				Result: fakestate,
+				No:     lastmb.CommittedNo,
+			}
 			//广播
 			log.Debugf("区块%v结果执行完成，广播给其他节点", result.Mb)
-			e.node.MulticastQuorum(e.gm.NotInGroup(lastmb.GroupId), result)
-			//e.node.Broadcast(result)
+			//e.node.MulticastQuorum2(e.gm.NotInGroup(lastmb.GroupId), result)
+			e.node.Broadcast2(result)
 		}
 	}
 }
@@ -165,24 +170,33 @@ func (e *Executor) ExecuteThread() { //表示是有一个mb被成功执行
 func (e *Executor) HandleResult(result *ExecuteResult) {
 	e.lock.Lock()
 	defer e.lock.Unlock()
-	if record, eixst := e.mbPending.done[result.Mb]; eixst {
-		record[result.PropsalId] = result.Sig
-	} else {
-		e.mbPending.done[result.Mb] = make(map[identity.NodeID]crypto.Signature)
-		e.mbPending.done[result.Mb][result.PropsalId] = result.Sig
+	high_done_index := 0
+	for i := 1; i <= result.No; i++ {
+		if record, eixst := e.mbPending.done[i]; eixst {
+			record[result.PropsalId] = result.Sig
+		} else {
+			e.mbPending.done[i] = make(map[identity.NodeID]crypto.Signature)
+			e.mbPending.done[i][result.PropsalId] = result.Sig
+		}
+
+		if len(e.mbPending.done[i]) >= config.GetConfig().Q {
+			//>= f+1个成功
+			//收到f+1个执行结果
+			high_done_index = i
+		}
 	}
-	log.Debugf("收到来自%v的执行成功，执行的mb是%v,目前一共有个%v个执行成功", result.PropsalId, result.Mb, len(e.mbPending.done[result.Mb]))
-	if len(e.mbPending.done[result.Mb]) >= config.GetConfig().Q {
-		//>= f+1个成功
-		//收到f+1个执行结果
-		log.Debugf("收到f+1个执行结果 开始执行")
-		e.mbReady(result.Mb)
+
+	log.Debugf("收到来自%v的执行成功，执行的mb是%v,目前一共有个%v个执行成功", result.PropsalId, result.Mb, len(e.mbPending.done[result.No]))
+	if high_done_index != 0 {
+		//又可以更新的
+		log.Debugf("执行队列%v以及之前的都被执行成功了", high_done_index)
+		e.mbReady(high_done_index)
 	}
 }
 
 //判断是微块是否已经被执行过
 func (e *Executor) CheckResult(mb *blockchain.MicroBlock) bool {
-	if len(e.mbPending.done[mbHash(mb.Hash)]) >= config.GetConfig().Q {
+	if len(e.mbPending.done[mb.CommittedNo]) >= config.GetConfig().Q {
 		log.Debugf("微块添加到队列之前就被执行了")
 		return true
 	}
@@ -210,10 +224,10 @@ func (e *Executor) HandleMiss(mb *blockchain.MicroBlock) {
 }
 
 //mbHash对应的微块就绪了
-func (e *Executor) mbReady(hash mbHash) {
+func (e *Executor) mbReady(commitNo int) {
 	end_index := -1
 	for index, mb := range e.mbPending.mbs {
-		if mb.Hash == crypto.Identifier(hash) {
+		if mb.CommittedNo == commitNo {
 			end_index = index
 		}
 	}
@@ -252,7 +266,7 @@ func NewExecutor(node node.Node) *Executor {
 		executor.node = node
 		executor.mbPending = mbList{
 			mbs:   make([]*blockchain.MicroBlock, 0),
-			done:  make(map[mbHash]map[identity.NodeID]crypto.Signature),
+			done:  make(map[int]map[identity.NodeID]crypto.Signature),
 			table: make(map[mbHash]*blockchain.MicroBlock),
 		}
 		executor.MbReceive = make(chan []*blockchain.MicroBlock, 10000)
@@ -371,6 +385,7 @@ func (e *Executor) readyForExecute(waitId int) {
 func (e *Executor) ShowQueueStatus() {
 	// e.lock.Lock()
 	// defer e.lock.Unlock()
+
 	for _, v := range e.mbPending.mbs {
 		// log.Debugf("is fake:%v", v.IsFake)
 		// log.Debugf("group:%v", v.GroupId)
@@ -378,6 +393,6 @@ func (e *Executor) ShowQueueStatus() {
 		// if _, ok := e.mbPending.done[mbHash(v.Hash)]; ok {
 		// 	log.Debugf("have receive %v done", len(e.mbPending.done[mbHash(v.Hash)]))
 		// }
-		log.Resultf("mb:%+v, done:%v", v.Hash, len(e.mbPending.done[mbHash(v.Hash)]))
+		log.Resultf("mb:%+v, group: %v,done:%v, mb'hash:%v", v.CommittedNo, v.GroupId, len(e.mbPending.done[v.CommittedNo]), v.Hash)
 	}
 }

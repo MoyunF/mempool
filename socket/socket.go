@@ -25,6 +25,8 @@ type Socket interface {
 	// MulticastQuorum sends msg to a set of nodes
 	MulticastQuorum(nodes []identity.NodeID, m interface{})
 
+	// MulticastQuorum2 sends msg to a set of nodes
+	MulticastQuorum2(nodes []identity.NodeID, m interface{})
 	// Broadcast send to all peers
 	Broadcast(m interface{})
 
@@ -278,6 +280,30 @@ func (s *socket) MulticastQuorum(nodes []identity.NodeID, m interface{}) {
 			continue
 		}
 		s.Send(id, m)
+	}
+}
+
+func (s *socket) MulticastQuorum2(nodes []identity.NodeID, m interface{}) {
+	//log.Debugf("node %s multicasting message %+v for %d nodes", s.id, m, quorum)
+	//a := make([]int, len(s.addresses))
+	//for i := range a {
+	//	a[i] = i + 1
+	//}
+	//a = append(a[:s.id.Node()-1], a[s.id.Node():]...)
+	//rand.Seed(time.Now().UnixNano())
+	//rand.Shuffle(len(a), func(i, j int) { a[i], a[j] = a[j], a[i] })
+	//for i := 0; i < quorum; i++ {
+	//	s.Send(identity.NewNodeID(a[i]), m)
+	//}
+	if nodes == nil {
+		return
+	}
+
+	for _, id := range nodes {
+		if id == s.id {
+			continue
+		}
+		s.Send2(id, m)
 	}
 }
 

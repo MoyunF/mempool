@@ -86,6 +86,7 @@ type Replica struct {
 	totalReceivedTxs          int
 	txNoInMB                  int
 	commitMbNo                int //提交的微块序号
+	CommitedMb                map[crypto.Identifier]struct{}
 	missingCounts             map[identity.NodeID]int
 	pendingBlockMap           map[crypto.Identifier]*blockchain.PendingBlock
 	missingMBs                map[crypto.Identifier]crypto.Identifier // microblock hash to proposal hash
@@ -125,10 +126,11 @@ func NewReplica(id identity.NodeID, alg string, isByz bool) *Replica {
 	//限制微块广播，用来控制最多可以广播多少微块
 	r.mbBroadcast = make(chan interface{}, config.GetConfig().Mb_broadcast)
 	//r.estimator = NewEstimator()
+	r.CommitedMb = make(map[crypto.Identifier]struct{})
 	r.start = make(chan bool)
 	r.eventChan = make(chan interface{})
 	r.poolChan = make(chan interface{}, config.GetConfig().Poolsize)
-	r.committedBlocks = make(chan *blockchain.Block, 100)
+	r.committedBlocks = make(chan *blockchain.Block)
 	r.forkedBlocks = make(chan *blockchain.Block, 100)
 	r.pendingBlockMap = make(map[crypto.Identifier]*blockchain.PendingBlock)
 	r.missingMBs = make(map[crypto.Identifier]crypto.Identifier)
@@ -194,52 +196,6 @@ func NewReplica(id identity.NodeID, alg string, isByz bool) *Replica {
 // it first checks if the referred microblocks exist in the mempool
 // and requests the missing ones
 func (r *Replica) HandleProposal(proposal blockchain.Proposal) {
-	// r.receivedNo++
-	// r.startSignal()
-	// r.totalProposeDuration += time.Now().Sub(proposal.Timestamp)
-	// log.Debugf("[%v] received a proposal from %v, containing %v microblocks, view is %v, id: %x, prevID: %x", r.ID(), proposal.Proposer, len(proposal.HashList), proposal.View, proposal.ID, proposal.PrevID)
-	// //if config.Configuration.MemType == "time" {
-	// //	ack := message.Ack{
-	// //		SentTime: proposal.Timestamp,
-	// //		AckTime:  time.Now(),
-	// //		Receiver: r.ID(),
-	// //		ID:       proposal.ID,
-	// //		Type:     "p",
-	// //	}
-	// //	r.Send(proposal.Proposer, ack)
-	// //}
-	// r.totalBlockSize += len(proposal.HashList)
-	// pendingBlock := r.sm.FillProposal(&proposal)
-	// //pendingBlock := r.sm.FillProposalByGroup(&proposal)
-	// // if config.Configuration.MemType == "ack" {
-	// // 	if !r.verifySigs(pendingBlock.Payload.SigMap) {
-	// // 		log.Warningf("[%v] received an block %x with invalid sigs for microblocks", r.ID(), proposal.ID)
-	// // 	}
-	// // }
-	// block := pendingBlock.CompleteBlock() //看一下有没有缺的
-	// if block != nil {
-	// 	log.Debugf("[%v] a block is ready, view: %v, id: %x", r.ID(), proposal.View, proposal.ID)
-	// 	r.eventChan <- *block
-	// 	return
-	// }
-	// //
-	// r.pendingBlockMap[proposal.ID] = pendingBlock
-	// log.Debugf("[%v] %v microblocks are missing in id: %x", r.ID(), pendingBlock.MissingCount(), proposal.ID)
-	// for _, mbid := range pendingBlock.MissingMBList() {
-	// 	r.missingMBs[mbid] = proposal.ID
-	// 	log.Debugf("[%v] a microblock is missing, id: %x", r.ID(), mbid)
-	// }
-	// if config.Configuration.MemType == "ack" { //如果是ack内存池，就先把已有的交付
-	// 	block = blockchain.BuildBlock(pendingBlock.Proposal, pendingBlock.Payload)
-	// 	r.eventChan <- *block
-	// 	return
-	// }
-	// missingRequest := message.MissingMBRequest{
-	// 	RequesterID:   r.ID(),
-	// 	ProposalID:    proposal.ID,
-	// 	MissingMBList: pendingBlock.MissingMBList(),
-	// }
-	// r.Send(proposal.Proposer, missingRequest)
 
 	r.receivedNo++
 	r.startSignal()
@@ -852,14 +808,25 @@ func (r *Replica) pickFanoutNodes(mb *blockchain.MicroBlock) []identity.NodeID {
 
 /* Processors */
 
+var lock sync.Mutex
+
 func (r *Replica) processCommittedBlock(block *blockchain.Block) {
 	// log.Debugf("提交区块%v", *&block.MicroblockList()[1].Hash)
 	// log.Debugf("提交区块%v", *&block.MicroblockList()[10].Hash)
+	lock.Lock()
+	defer lock.Unlock()
 	var txCount int
+	deliver := make([]*blockchain.MicroBlock, 0)
 	r.totalCommittedMBs += len(block.MicroblockList())
 	for _, mb := range block.MicroblockList() {
+		if _, exist := r.CommitedMb[mb.Hash]; exist {
+			log.Debugf("提交了重复的区块%v", mb.Hash)
+			continue
+		}
+		deliver = append(deliver, mb)
+		r.CommitedMb[mb.Hash] = struct{}{}
 		r.commitMbNo++
-		mb.CommittedNo = r.commitMbNo
+		mb.CommittedNo = r.commitMbNo //从1开始
 		txCount += len(mb.Txns)
 		for _, txn := range mb.Txns {
 			// only record the delay of transactions from the local memory pool
@@ -874,7 +841,7 @@ func (r *Replica) processCommittedBlock(block *blockchain.Block) {
 	r.committedNo++
 	log.Infof("[%v] the block is committed, No. of microblocks: %v, No. of tx: %v, view: %v, current view: %v, id: %x",
 		r.ID(), len(block.MicroblockList()), txCount, block.View, r.pm.GetCurView(), block.ID)
-	r.ex.MbReceive <- block.MicroblockList() //全部交付
+	r.ex.MbReceive <- deliver //全部交付
 }
 
 func (r *Replica) processForkedBlock(block *blockchain.Block) {
