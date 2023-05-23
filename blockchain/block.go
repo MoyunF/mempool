@@ -50,6 +50,7 @@ type MicroBlock struct {
 	IsForward       bool
 	Bitmap          bitmap.Bitmap
 	Hops            int
+	CommittedNo     int
 }
 
 type Proposal struct {
@@ -57,6 +58,7 @@ type Proposal struct {
 	HashList  []crypto.Identifier
 	GroupList []int
 	AckNode   []map[identity.NodeID]struct{}
+	MbTime    []time.Time
 }
 
 type PendingBlock struct {
@@ -74,7 +76,7 @@ type rawProposal struct {
 }
 
 // BuildProposal creates a signed proposal
-func BuildProposal(view types.View, qc *QC, prevID crypto.Identifier, payload []crypto.Identifier, groupList []int, ackNodeList []map[identity.NodeID]struct{}, proposer identity.NodeID) *Proposal {
+func BuildProposal(view types.View, qc *QC, prevID crypto.Identifier, payload []crypto.Identifier, groupList []int, ackNodeList []map[identity.NodeID]struct{}, mbTime []time.Time, proposer identity.NodeID) *Proposal {
 	p := new(Proposal)
 	p.View = view
 	p.Proposer = proposer
@@ -83,6 +85,7 @@ func BuildProposal(view types.View, qc *QC, prevID crypto.Identifier, payload []
 	p.PrevID = prevID
 	p.GroupList = groupList
 	p.AckNode = ackNodeList
+	p.MbTime = mbTime
 	p.makeID(proposer)
 	return p
 }
@@ -119,6 +122,17 @@ func (pl *Payload) GenerateGroupList() []int {
 		groupList = append(groupList, mb.GroupId)
 	}
 	return groupList
+}
+
+func (pl *Payload) GenerateTimeList() []time.Time {
+	timeList := make([]time.Time, 0)
+	for _, mb := range pl.MicroblockList {
+		if mb == nil {
+			continue
+		}
+		timeList = append(timeList, mb.Timestamp)
+	}
+	return timeList
 }
 
 func (pl *Payload) addMicroblock(mb *MicroBlock) {

@@ -153,7 +153,7 @@ func (am *AckMem) AddMicroblock(mb *blockchain.MicroBlock) error {
 		pm.AckOutGroup = append(pm.AckOutGroup, mb.Sender)
 	}
 	am.microblockMap[mb.Hash] = mb
-	log.Debugf("收到了mb：%v", mb.Hash)
+	log.Debugf("收到了mb：%v ,mb's fake : %v", mb.Hash, mb.IsFake)
 
 	//check if there are some acks of this microblock arrived before
 	buffer, received := am.ackBuffer[mb.Hash]
@@ -218,7 +218,7 @@ func (am *AckMem) AddAck(ack *blockchain.Ack) {
 				am.TotalStableMbs++
 				am.TotalStableDelay += time.Now().Sub(target.microblock.Timestamp)
 				//log.Debugf("push a stableMb id:%v", target.microblock)
-				//delete(am.pendingMicroblocks, ack.MicroblockID)
+				delete(am.pendingMicroblocks, ack.MicroblockID)
 				//构建stable信息
 				stable := blockchain.Stable{
 					AckInGroup:     make([]identity.NodeID, len(target.AckInGroup)),
@@ -231,6 +231,7 @@ func (am *AckMem) AddAck(ack *blockchain.Ack) {
 				am.StableBuffer[target.microblock.Hash] = stable //保存stable信息
 				copy(stable.AckInGroup, target.AckInGroup)
 				copy(stable.AckOutGroup, target.AckOutGroup)
+				log.Debugf("stable准备广播: %+v", stable)
 				am.node.Broadcast(stable)
 			}
 		}
@@ -269,18 +270,19 @@ func (am *AckMem) AddStable(stable *blockchain.Stable) {
 	if received {
 		am.stableMicroblocks.PushBack(target.microblock)
 		am.stableMBs[target.microblock.Hash] = struct{}{}
-		am.microblockMap[target.microblock.Hash] = target.microblock
 		am.TotalStableMbs++
 		am.TotalStableDelay += time.Now().Sub(target.microblock.Timestamp)
 
 		log.Debugf("receive stale from %v", stable.Sender)
 		delete(am.pendingMicroblocks, stable.MicroblockID)
-	} else {
+	}
+	_, exist := am.microblockMap[stable.MicroblockID]
+	if !exist {
 		//收到了stable但是没有收到微块
 		if am.gm.IsInGroup(stable.GroupId, am.node.ID()) {
 			log.Debugf("收到了一个自己组的stable，但是没有对应的微块")
 		} else {
-			log.Debugf("收到了其他组的stable，所以无所谓")
+			log.Debugf("收到了其他组的stable，所以构建一个fake块")
 		}
 		mb := &blockchain.MicroBlock{
 			IsFake:    true,
@@ -296,29 +298,6 @@ func (am *AckMem) AddStable(stable *blockchain.Stable) {
 		am.TotalStableDelay += time.Now().Sub(mb.Timestamp)
 
 		am.microblockMap[mb.Hash] = mb //变量逃逸
-
-		//先不要，在execute的时候要
-
-		// missStableRequest := message.MissingStableMBRequest{
-		// 	RequesterID: am.node.ID(), //本人id
-		// 	MbID:        stable.MicroblockID,
-		// }
-		// requestNode := make([]identity.NodeID, 0)
-		// if config.GetConfig().BroadcastByGroup == true {
-		// 	//分组的情况
-		// 	if am.gm.IsInMyGroup(stable.GroupId) {
-		// 		//是自己组内的微块
-		// 		log.Debugf("向组内节点要")
-		// 		requestNode = append(requestNode, stable.AckInGroup...)
-		// 		am.node.MulticastQuorum(requestNode, missStableRequest)
-		// 	} else {
-		// 		log.Debugf("不是自己组内的节点，不需要要")
-		// 	}
-		// } else {
-		// 	//不分组
-		// 	log.Debugf("向所有节点要")
-		// 	am.node.Broadcast(missStableRequest)
-		// }
 	}
 }
 
@@ -476,46 +455,33 @@ func (am *AckMem) FetchMB(p *blockchain.Proposal) *blockchain.PendingBlock {
 	existingBlocks := make([]*blockchain.MicroBlock, 0)
 	missingBlocks := make(map[crypto.Identifier]struct{}, 0)
 	for index, id := range p.HashList {
-		//看一下是否有对应的stable信息
-		found := false
+		//把相关额pending和stable都删掉
 		_, exists := am.pendingMicroblocks[id]
 		if exists {
-			found = true
-			existingBlocks = append(existingBlocks, am.pendingMicroblocks[id].microblock)
 			delete(am.pendingMicroblocks, id)
-			//log.Debugf("microblock id: %x is deleted from pending when filling", id)
-		}
-		_, exexists := am.microblockMap[id]
-		if found == false && exexists {
-			found = true
-			existingBlocks = append(existingBlocks, am.microblockMap[id])
+			log.Debugf("microblock id: %x is deleted from pending when filling", id)
 		}
 		for e := am.stableMicroblocks.Front(); e != nil; e = e.Next() {
 			// do something with e.Value
 			mb := e.Value.(*blockchain.MicroBlock)
 			if mb.Hash == id {
-				existingBlocks = append(existingBlocks, mb)
-				//found = true
-				if found == false {
-					am.stableMicroblocks.Remove(e)
-				}
-				found = true
-				//log.Debugf("microblock id: %x is deleted from stable when filling", mb.Hash)
+				am.stableMicroblocks.Remove(e)
+				log.Debugf("microblock id: %x is deleted from stable when filling", mb.Hash)
 				break
 			}
 		}
-		//看看有没有后面重传找到的
-		// mb, ok := am.microblockMap[id]
-		// if ok && mb.IsFake != false {
-		// 	found = true
-		// 	existingBlocks = append(existingBlocks, mb)
-		// }
-		//没有的话，但是能保证这个块一定能找到，所以生成一个假块
-		if !found {
+
+		mb, ok := am.microblockMap[id]
+		if ok {
+			log.Debugf("FetchMb，在本地找到%v，mb's fake:%v", id, mb.IsFake)
+			existingBlocks = append(existingBlocks, mb)
+		} else {
+			log.Debugf("Porposal中的mb id: %x 我没有", id)
 			mb := &blockchain.MicroBlock{
-				IsFake:  true,
-				Hash:    id,
-				GroupId: p.GroupList[index],
+				IsFake:    true,
+				Hash:      id,
+				GroupId:   p.GroupList[index],
+				Timestamp: p.MbTime[index],
 			}
 			existingBlocks = append(existingBlocks, mb)
 		}

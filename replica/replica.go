@@ -85,6 +85,7 @@ type Replica struct {
 	totalRedundantMBs         int
 	totalReceivedTxs          int
 	txNoInMB                  int
+	commitMbNo                int //提交的微块序号
 	missingCounts             map[identity.NodeID]int
 	pendingBlockMap           map[crypto.Identifier]*blockchain.PendingBlock
 	missingMBs                map[crypto.Identifier]crypto.Identifier // microblock hash to proposal hash
@@ -857,6 +858,8 @@ func (r *Replica) processCommittedBlock(block *blockchain.Block) {
 	var txCount int
 	r.totalCommittedMBs += len(block.MicroblockList())
 	for _, mb := range block.MicroblockList() {
+		r.commitMbNo++
+		mb.CommittedNo = r.commitMbNo
 		txCount += len(mb.Txns)
 		for _, txn := range mb.Txns {
 			// only record the delay of transactions from the local memory pool
@@ -871,28 +874,7 @@ func (r *Replica) processCommittedBlock(block *blockchain.Block) {
 	r.committedNo++
 	log.Infof("[%v] the block is committed, No. of microblocks: %v, No. of tx: %v, view: %v, current view: %v, id: %x",
 		r.ID(), len(block.MicroblockList()), txCount, block.View, r.pm.GetCurView(), block.ID)
-
-	deliver := make([]*blockchain.MicroBlock, 0)
-	lastGroupid := -1
-	for i := 0; i < len(block.MicroblockList()); i++ {
-		if i == 0 {
-			deliver = append(deliver, block.MicroblockList()[i])
-			lastGroupid = block.MicroblockList()[i].GroupId
-		} else {
-			curId := block.MicroblockList()[i].GroupId
-			if curId == lastGroupid {
-				deliver = append(deliver, block.MicroblockList()[i])
-			} else {
-				r.ex.MbReceive <- deliver                   //遇到第一个不同的，把之前的先交付
-				deliver = make([]*blockchain.MicroBlock, 0) //重新构造deliver数组
-				deliver = append(deliver, block.MicroblockList()[i])
-				lastGroupid = block.MicroblockList()[i].GroupId
-			}
-		}
-	}
-	if len(deliver) != 0 {
-		r.ex.MbReceive <- deliver
-	}
+	r.ex.MbReceive <- block.MicroblockList() //全部交付
 }
 
 func (r *Replica) processForkedBlock(block *blockchain.Block) {
@@ -960,7 +942,11 @@ func (r *Replica) proposeBlock(view types.View) {
 	//if config.Configuration.MemType == "time" {
 	//	r.waitUntilStable(payload)
 	//}
-	proposal := r.Safety.MakeProposal(view, payload.GenerateHashList(), payload.GenerateGroupList(), payload.AckNode)
+	proposal := r.Safety.MakeProposal(view, payload.GenerateHashList(),
+		payload.GenerateGroupList(),
+		payload.AckNode,
+		payload.GenerateTimeList(),
+	)
 	log.Debugf("[%v] is making a proposal for view %v, containing %v microblocks, %v left,id:%x", proposal.Proposer, proposal.View, len(proposal.HashList), r.sm.RemainingMB(), proposal.ID)
 	//log.Debugf("[%v] contained microblocks are", r.ID())
 	//for _, id := range proposal.HashList {

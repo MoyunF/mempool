@@ -86,21 +86,20 @@ func (e *Executor) AddMbToExecute(mb []*blockchain.MicroBlock) {
 	e.lock.Lock()
 	defer e.lock.Unlock()
 
-	log.Debugf("添加%v个微块给执行队列", len(mb))
-	done_index := 0
+	log.Debugf("有%v个微块准备添加给执行队列", len(mb))
+	done_index := -1
 	for index, v := range mb {
 		if e.CheckResult(v) == true {
 			done_index = index
 			continue
 		}
 	}
-	if done_index != 0 {
+	if done_index != -1 {
 		for i := 0; i <= done_index; i++ {
 			e.updateState(mb[i])
 		}
+		mb = mb[done_index+1:]
 	}
-
-	mb = mb[done_index+1:]
 
 	log.Debugf("预处理后，%v之前的微块已经被执行过了，添加%v个微块给执行队列", done_index, len(mb))
 
@@ -129,7 +128,7 @@ func (e *Executor) ExecuteThread() { //表示是有一个mb被成功执行
 				}
 				requestNode := make([]identity.NodeID, 0)
 
-				log.Debugf("当前需要我执行的mb，我没有，向组内节点要")
+				log.Debugf("当前需要我执行的mb:%v,没有，向组内节点要", mb.Hash)
 				requestNode = append(requestNode)
 				e.node.MulticastQuorum(requestNode, missStableRequest)
 				break
@@ -140,7 +139,7 @@ func (e *Executor) ExecuteThread() { //表示是有一个mb被成功执行
 				e.mbPending.mbs = e.mbPending.mbs[1:]
 			}
 		} else {
-			log.Debugf("当前%v的队头节点是%v分组的，不是我执行", index, mb.GroupId)
+			log.Debugf("当前%v的队头节点是%v分组负责，无法执行", index, mb.GroupId)
 			break
 		}
 	}
@@ -155,7 +154,7 @@ func (e *Executor) ExecuteThread() { //表示是有一个mb被成功执行
 			}
 			result := &ExecuteResult{PropsalId: e.node.ID(), Sig: sig, Mb: mbHash(lastmb.Hash), Result: fakestate}
 			//广播
-			log.Debugf("区块结果执行完成，广播给其他节点")
+			log.Debugf("区块%v结果执行完成，广播给其他节点", result.Mb)
 			e.node.MulticastQuorum(e.gm.NotInGroup(lastmb.GroupId), result)
 			//e.node.Broadcast(result)
 		}
@@ -172,7 +171,7 @@ func (e *Executor) HandleResult(result *ExecuteResult) {
 		e.mbPending.done[result.Mb] = make(map[identity.NodeID]crypto.Signature)
 		e.mbPending.done[result.Mb][result.PropsalId] = result.Sig
 	}
-	log.Debugf("收到来自%v的执行成功，执行的mb是%v,目前一共有个%v个", result.PropsalId, result.Mb, len(e.mbPending.done[result.Mb]))
+	log.Debugf("收到来自%v的执行成功，执行的mb是%v,目前一共有个%v个执行成功", result.PropsalId, result.Mb, len(e.mbPending.done[result.Mb]))
 	if len(e.mbPending.done[result.Mb]) >= config.GetConfig().Q {
 		//>= f+1个成功
 		//收到f+1个执行结果
@@ -183,7 +182,7 @@ func (e *Executor) HandleResult(result *ExecuteResult) {
 
 //判断是微块是否已经被执行过
 func (e *Executor) CheckResult(mb *blockchain.MicroBlock) bool {
-	if len(e.mbPending.done[mbHash(mb.Hash)]) > config.GetConfig().Q {
+	if len(e.mbPending.done[mbHash(mb.Hash)]) >= config.GetConfig().Q {
 		log.Debugf("微块添加到队列之前就被执行了")
 		return true
 	}
@@ -212,18 +211,18 @@ func (e *Executor) HandleMiss(mb *blockchain.MicroBlock) {
 
 //mbHash对应的微块就绪了
 func (e *Executor) mbReady(hash mbHash) {
-	end_index := 0
+	end_index := -1
 	for index, mb := range e.mbPending.mbs {
 		if mb.Hash == crypto.Identifier(hash) {
 			end_index = index
 		}
 	}
 
-	if end_index == 0 {
+	if end_index == -1 {
 		log.Debugf("收到执行成功，但是对应的微块还没到，当前队列长度%v", len(e.mbPending.mbs))
 	}
 
-	for i := 0; i < end_index; i++ {
+	for i := 0; i <= end_index; i++ {
 		e.updateState(e.mbPending.mbs[0])
 		e.mbPending.mbs = e.mbPending.mbs[1:] //丢失队头
 	}
@@ -234,7 +233,7 @@ func (e *Executor) mbReady(hash mbHash) {
 	// 		e.mbPending.mbs = e.mbPending.mbs[1:]
 	// 	}
 	// }
-	log.Debugf("收到执行成功，当前队列长度%v", len(e.mbPending.mbs))
+	log.Debugf("执行成功，执行了%v个任务,当前队列长度%v", end_index+1, len(e.mbPending.mbs))
 	e.ExecuteThread()
 }
 
