@@ -130,7 +130,7 @@ func NewReplica(id identity.NodeID, alg string, isByz bool) *Replica {
 	r.start = make(chan bool)
 	r.eventChan = make(chan interface{})
 	r.poolChan = make(chan interface{}, config.GetConfig().Poolsize)
-	r.committedBlocks = make(chan *blockchain.Block)
+	r.committedBlocks = make(chan *blockchain.Block, 100)
 	r.forkedBlocks = make(chan *blockchain.Block, 100)
 	r.pendingBlockMap = make(map[crypto.Identifier]*blockchain.PendingBlock)
 	r.missingMBs = make(map[crypto.Identifier]crypto.Identifier)

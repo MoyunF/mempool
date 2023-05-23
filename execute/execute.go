@@ -66,11 +66,7 @@ func (e *Executor) HandleMB() {
 		select {
 		case mb := <-e.MbReceive:
 			//接受执行
-			if config.GetConfig().BroadcastByGroup == true {
-				e.AddMbToExecute(mb)
-			} else {
-				//e.ExecuteForSerial(mb)
-			}
+			e.AddMbToExecute(mb)
 		case mb := <-e.MissReceive:
 			//收到丢失的区块
 			e.HandleMiss(mb)
@@ -87,81 +83,93 @@ func (e *Executor) AddMbToExecute(mb []*blockchain.MicroBlock) {
 	e.lock.Lock()
 	defer e.lock.Unlock()
 
-	log.Debugf("有%v个微块添加给执行队列", len(mb))
+	if config.GetConfig().BroadcastByGroup == true {
 
-	e.mbPending.mbs = append(e.mbPending.mbs, mb...)
-	log.Debugf("添加mb到执行队列,队列长度：%v", len(e.mbPending.mbs))
+		log.Debugf("有%v个微块添加给执行队列", len(mb))
 
-	done_index := -1
-	for index, v := range e.mbPending.mbs {
-		if e.CheckResult(v) == true {
-			done_index = index
-			continue
+		e.mbPending.mbs = append(e.mbPending.mbs, mb...)
+		log.Debugf("添加mb到执行队列,队列长度：%v", len(e.mbPending.mbs))
+
+		done_index := -1
+		for index, v := range e.mbPending.mbs {
+			if e.CheckResult(v) == true {
+				done_index = index
+				continue
+			}
 		}
-	}
-	if done_index != -1 {
-		log.Debugf("处理一下之前缓存的result")
-		for i := 0; i <= done_index; i++ {
-			e.updateState(e.mbPending.mbs[0])
-			e.mbPending.mbs = e.mbPending.mbs[1:]
+		if done_index != -1 {
+			log.Debugf("处理一下之前缓存的result")
+			for i := 0; i <= done_index; i++ {
+				e.updateState(e.mbPending.mbs[0])
+				e.mbPending.mbs = e.mbPending.mbs[1:]
+			}
 		}
+	} else {
+		e.mbPending.mbs = append(e.mbPending.mbs, mb...)
+		log.Debugf("添加mb到执行队列,队列长度：%v", len(e.mbPending.mbs))
 	}
-	// for _, mb := range e.mbPending.mbs {
-	// 	if !mb.IsFake && e.gm.IsInMyGroup(mb.GroupId) {
-	// 		log.Debugf("在执行组中 组：%v", mb.GroupId)
-	// 		e.ExecuteAndBroadcast(mb)
-	// 		e.mbPending.mbs = e.mbPending.mbs[1:]
-	// 	}
-	// }
 	e.ExecuteThread()
 }
 
 func (e *Executor) ExecuteThread() { //表示是有一个mb被成功执行
 	var lastmb *blockchain.MicroBlock = nil
 	e.ShowQueueStatus()
-	for _, mb := range e.mbPending.mbs {
-		if e.gm.IsInMyGroup(mb.GroupId) {
+	if config.GetConfig().BroadcastByGroup == true {
+		for _, mb := range e.mbPending.mbs {
+			if e.gm.IsInMyGroup(mb.GroupId) {
+				if mb.IsFake == true {
+					//请求重传
+					missStableRequest := message.MissingStableMBRequest{
+						RequesterID: e.node.ID(), //本人id
+						MbID:        mb.Hash,
+					}
+					requestNode := make([]identity.NodeID, 0)
+
+					log.Debugf("当前需要我执行的mb:%v,没有，向组内节点要", mb.Hash)
+					requestNode = append(requestNode)
+					e.node.MulticastQuorum(requestNode, missStableRequest)
+					break
+				} else {
+					log.Debugf("在执行组中 组：%v", mb.GroupId)
+					lastmb = mb
+					e.Execute(mb)
+					e.mbPending.mbs = e.mbPending.mbs[1:]
+				}
+			} else {
+				log.Debugf("当前队头任务%v是%v分组负责，无法执行", mb.Hash, mb.GroupId)
+				break
+			}
+		}
+		if lastmb != nil {
+			sig, err := crypto.PrivSign(lastmb.Hash[:], e.node.ID(), nil)
+			if err != nil {
+				log.Debugf("对结果签名失败")
+			} else {
+				fakestate := ""
+				for i := 0; i < 200; i++ {
+					fakestate += "0x112312912480:32"
+				}
+				result := &ExecuteResult{PropsalId: e.node.ID(), Sig: sig,
+					Mb:     mbHash(lastmb.Hash),
+					Result: fakestate,
+					No:     lastmb.CommittedNo,
+				}
+				//广播
+				log.Debugf("区块%v结果执行完成，广播给其他节点", result.Mb)
+				//e.node.MulticastQuorum2(e.gm.NotInGroup(lastmb.GroupId), result)
+				e.node.Broadcast2(result)
+			}
+		}
+	} else {
+		//不分组
+		for _, mb := range e.mbPending.mbs {
 			if mb.IsFake == true {
 				//请求重传
-				missStableRequest := message.MissingStableMBRequest{
-					RequesterID: e.node.ID(), //本人id
-					MbID:        mb.Hash,
-				}
-				requestNode := make([]identity.NodeID, 0)
-
-				log.Debugf("当前需要我执行的mb:%v,没有，向组内节点要", mb.Hash)
-				requestNode = append(requestNode)
-				e.node.MulticastQuorum(requestNode, missStableRequest)
 				break
 			} else {
-				log.Debugf("在执行组中 组：%v", mb.GroupId)
-				lastmb = mb
 				e.Execute(mb)
 				e.mbPending.mbs = e.mbPending.mbs[1:]
 			}
-		} else {
-			log.Debugf("当前队头任务%v是%v分组负责，无法执行", mb.Hash, mb.GroupId)
-			break
-		}
-	}
-	if lastmb != nil {
-		sig, err := crypto.PrivSign(lastmb.Hash[:], e.node.ID(), nil)
-		if err != nil {
-			log.Debugf("对结果签名失败")
-		} else {
-			fakestate := ""
-			for i := 0; i < 200; i++ {
-				fakestate += "0x112312912480:32"
-			}
-			result := &ExecuteResult{PropsalId: e.node.ID(), Sig: sig,
-				Mb:     mbHash(lastmb.Hash),
-				Result: fakestate,
-				No:     lastmb.CommittedNo,
-			}
-			//广播
-			log.Debugf("区块%v结果执行完成，广播给其他节点", result.Mb)
-			//e.node.MulticastQuorum2(e.gm.NotInGroup(lastmb.GroupId), result)
-			e.node.Broadcast2(result)
 		}
 	}
 }
@@ -278,9 +286,9 @@ func NewExecutor(node node.Node) *Executor {
 	return executor
 }
 
-func (e *Executor) ExecuteForSerial(mb *blockchain.MicroBlock) {
+func (e *Executor) ExecuteForSerial(mbs []*blockchain.MicroBlock) {
 	//用于串行执行
-	e.rawExecute(mb)
+
 }
 
 func (e *Executor) ExecuteForParallel(mb *blockchain.MicroBlock) {

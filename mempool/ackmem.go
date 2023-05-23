@@ -2,6 +2,7 @@ package mempool
 
 import (
 	"container/list"
+	"sort"
 	"sync"
 	"time"
 
@@ -319,6 +320,24 @@ func (am *AckMem) GeneratePayload() *blockchain.Payload {
 			time.Sleep(100 * time.Millisecond)
 		}
 	}
+
+	//重排stable
+	items := make([]*blockchain.MicroBlock, 0, am.stableMicroblocks.Len())
+	for e := am.stableMicroblocks.Front(); e != nil; e = e.Next() {
+		items = append(items, e.Value.(*blockchain.MicroBlock))
+	}
+
+	// 使用切片的排序功能对元素进行排序
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].GroupId < items[j].GroupId
+	})
+
+	// 将排序后的元素重新放回 list.List
+	am.stableMicroblocks.Init()
+	for _, item := range items {
+		am.stableMicroblocks.PushBack(item)
+	}
+
 	sigMap := make(map[crypto.Identifier]map[identity.NodeID]crypto.Signature, 0)
 	log.Debugf("generatePayload,stable mb is %v", am.stableMicroblocks.Len())
 	if am.stableMicroblocks.Len() >= am.bsize {

@@ -71,7 +71,7 @@
   "hasher": "sha3_256",
   "signer": "ECDSA_P256",
   "pprof": false,
-  "broadcastBygroup":true,
+  "broadcastBygroup":false,
   "onlyworker":false,
   "model":"exp2",
   "txPerSecond":2000,
