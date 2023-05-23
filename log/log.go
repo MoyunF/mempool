@@ -19,6 +19,7 @@ const (
 	INFO
 	WARNING
 	ERROR
+	RESULT
 )
 
 var names = []string{
@@ -26,6 +27,7 @@ var names = []string{
 	INFO:    "INFO",
 	WARNING: "WARNING",
 	ERROR:   "ERROR",
+	RESULT:  "RESULT",
 }
 
 func (s *severity) Get() interface{} {
@@ -57,6 +59,7 @@ type logger struct {
 	info    *stdlog.Logger
 	warning *stdlog.Logger
 	err     *stdlog.Logger
+	result  *stdlog.Logger
 
 	severity severity
 	dir      string
@@ -123,8 +126,14 @@ func Setup() {
 	multi := io.MultiWriter(f, os.Stderr)
 	log.warning = stdlog.New(multi, "[WARNING] ", format)
 	log.err = stdlog.New(multi, "[ERROR] ", format)
+	log.result = stdlog.New(multi, "[RESULT] ", format)
 }
 
+func Resultf(format string, v ...interface{}) {
+	if log.severity <= RESULT {
+		log.result.Output(2, fmt.Sprintf(format, v...))
+	}
+}
 func Debug(v ...interface{}) {
 	if log.severity == DEBUG {
 		log.debug.Output(2, fmt.Sprint(v...))

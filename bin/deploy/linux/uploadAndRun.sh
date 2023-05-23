@@ -10,7 +10,7 @@ sh setup_cli.sh
 
 #限制带宽
 echo "限制带宽"
-sudo bash ./limit-bandwith.sh 102400 102400 
+sudo bash ./limit-bandwith.sh 102400 102400
 
 sh start_server.sh
 sh start_client.sh

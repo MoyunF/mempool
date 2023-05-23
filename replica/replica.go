@@ -4,12 +4,14 @@ import (
 	"encoding/gob"
 	"fmt"
 	"math/rand"
+	"sync"
 	"time"
 
 	"github.com/gitferry/bamboo/crypto"
 	"github.com/gitferry/bamboo/execute"
 	"github.com/gitferry/bamboo/group"
 	"github.com/gitferry/bamboo/limiter"
+	"github.com/gitferry/bamboo/txpool"
 	"github.com/gitferry/bamboo/utils"
 	"github.com/kelindar/bitmap"
 
@@ -32,10 +34,11 @@ type Replica struct {
 	node.Node
 	Safety
 	election.Election
-	sm mempool.SharedMempool
-	pm *pacemaker.Pacemaker
-	ex *execute.Executor
-	gm *group.GroupManager
+	sm   mempool.SharedMempool
+	pm   *pacemaker.Pacemaker
+	ex   *execute.Executor
+	gm   *group.GroupManager
+	Pool *txpool.Txpool
 	/*for group by lxx*/
 
 	//estimator       *Estimator
@@ -46,7 +49,7 @@ type Replica struct {
 	committedBlocks chan *blockchain.Block
 	forkedBlocks    chan *blockchain.Block
 	eventChan       chan interface{}
-
+	mbBroadcast     chan interface{}
 	/* for monitoring node statistics */
 	thrus                     string
 	lastViewTime              time.Time
@@ -57,14 +60,17 @@ type Replica struct {
 	totalProcessDuration      time.Duration
 	totalProposeDuration      time.Duration
 	totalDisseminationTime    time.Duration
+	totaRealDissminationTime  time.Duration //收到的完整微块的时间
 	totalDelay                time.Duration
 	totalRoundTime            time.Duration
 	totalVoteTime             time.Duration
 	totalSlowDisemminationDur time.Duration
+	totalStableTime           time.Duration
 	totalSlowMBs              int
 	totalBlockSize            int
 	totalMicroblocks          int
 	totalProposedMBs          int
+	totalRealMBS              int //完整微块
 	missingMicroblocks        int
 	receivedNo                int
 	roundNo                   int
@@ -85,10 +91,14 @@ type Replica struct {
 	receivedMBs               map[crypto.Identifier]struct{}
 	selfMBChan                chan blockchain.MicroBlock
 	otherMBChan               chan blockchain.MicroBlock
+	poolChan                  chan interface{}
 	limiter                   *limiter.Bucket
 	mbSentNodes               map[crypto.Identifier]bitmap.Bitmap
 
+	hasMiss chan bool //是否收到的微块已经被执行了
+
 	totalTx int //提交的总交易数
+	result  string
 }
 
 // NewReplica creates a new replica instance
@@ -106,13 +116,17 @@ func NewReplica(id identity.NodeID, alg string, isByz bool) *Replica {
 	r.isByz = isByz
 	r.pm = pacemaker.NewPacemaker(config.GetConfig().N())
 	//增加执行器
-	r.ex = execute.NewExecutor()
+	r.ex = execute.NewExecutor(r.Node)
 	//增加分组器
 	r.gm = group.NewGroupManager(r.ID())
-
+	//交易池
+	r.Pool = txpool.NewTxpool(r.Node)
+	//限制微块广播，用来控制最多可以广播多少微块
+	r.mbBroadcast = make(chan interface{}, config.GetConfig().Mb_broadcast)
 	//r.estimator = NewEstimator()
 	r.start = make(chan bool)
 	r.eventChan = make(chan interface{})
+	r.poolChan = make(chan interface{}, config.GetConfig().Poolsize)
 	r.committedBlocks = make(chan *blockchain.Block, 100)
 	r.forkedBlocks = make(chan *blockchain.Block, 100)
 	r.pendingBlockMap = make(map[crypto.Identifier]*blockchain.PendingBlock)
@@ -125,12 +139,12 @@ func NewReplica(id identity.NodeID, alg string, isByz bool) *Replica {
 	r.limiter = limiter.NewBucket(time.Duration(config.Configuration.FillInterval)*time.Millisecond, int64(config.Configuration.Capacity))
 	memType := config.GetConfig().MemType
 	switch memType {
-	case "naive":
-		r.sm = mempool.NewNaiveMem()
+	// case "naive":
+	// 	r.sm = mempool.NewNaiveMem()
 	//case "time":
 	//	r.sm = mempool.NewTimemem()
 	case "ack":
-		r.sm = mempool.NewAckMem()
+		r.sm = mempool.NewAckMem(r.Node, r.gm)
 	}
 	r.Register(blockchain.Proposal{}, r.HandleProposal)
 	r.Register(blockchain.MicroBlock{}, r.HandleMicroblock)
@@ -139,7 +153,10 @@ func NewReplica(id identity.NodeID, alg string, isByz bool) *Replica {
 	r.Register(message.Transaction{}, r.handleTxn)
 	r.Register(message.Query{}, r.handleQuery)
 	r.Register(message.MissingMBRequest{}, r.HandleMissingMBRequest)
+	r.Register(message.MissingStableMBRequest{}, r.HandleMissingStableMb)
 	r.Register(blockchain.Ack{}, r.HandleAck)
+	r.Register(execute.ExecuteResult{}, r.handleResult)
+	r.Register(blockchain.Stable{}, r.HandleStable)
 	gob.Register(blockchain.Proposal{})
 	gob.Register(blockchain.MicroBlock{})
 	gob.Register(blockchain.Vote{})
@@ -147,6 +164,9 @@ func NewReplica(id identity.NodeID, alg string, isByz bool) *Replica {
 	gob.Register(pacemaker.TMO{})
 	gob.Register(message.MissingMBRequest{})
 	gob.Register(blockchain.Ack{})
+	gob.Register(execute.ExecuteResult{})
+	gob.Register(blockchain.Stable{})
+	gob.Register(message.MissingStableMBRequest{})
 
 	// Is there a better way to reduce the number of parameters?
 	switch alg {
@@ -163,6 +183,7 @@ func NewReplica(id identity.NodeID, alg string, isByz bool) *Replica {
 	default:
 		r.Safety = hotstuff.NewHotStuff(r.Node, r.pm, r.Election, r.committedBlocks, r.forkedBlocks)
 	}
+	go r.saveResult()
 	return r
 }
 
@@ -172,52 +193,69 @@ func NewReplica(id identity.NodeID, alg string, isByz bool) *Replica {
 // it first checks if the referred microblocks exist in the mempool
 // and requests the missing ones
 func (r *Replica) HandleProposal(proposal blockchain.Proposal) {
+	// r.receivedNo++
+	// r.startSignal()
+	// r.totalProposeDuration += time.Now().Sub(proposal.Timestamp)
+	// log.Debugf("[%v] received a proposal from %v, containing %v microblocks, view is %v, id: %x, prevID: %x", r.ID(), proposal.Proposer, len(proposal.HashList), proposal.View, proposal.ID, proposal.PrevID)
+	// //if config.Configuration.MemType == "time" {
+	// //	ack := message.Ack{
+	// //		SentTime: proposal.Timestamp,
+	// //		AckTime:  time.Now(),
+	// //		Receiver: r.ID(),
+	// //		ID:       proposal.ID,
+	// //		Type:     "p",
+	// //	}
+	// //	r.Send(proposal.Proposer, ack)
+	// //}
+	// r.totalBlockSize += len(proposal.HashList)
+	// pendingBlock := r.sm.FillProposal(&proposal)
+	// //pendingBlock := r.sm.FillProposalByGroup(&proposal)
+	// // if config.Configuration.MemType == "ack" {
+	// // 	if !r.verifySigs(pendingBlock.Payload.SigMap) {
+	// // 		log.Warningf("[%v] received an block %x with invalid sigs for microblocks", r.ID(), proposal.ID)
+	// // 	}
+	// // }
+	// block := pendingBlock.CompleteBlock() //看一下有没有缺的
+	// if block != nil {
+	// 	log.Debugf("[%v] a block is ready, view: %v, id: %x", r.ID(), proposal.View, proposal.ID)
+	// 	r.eventChan <- *block
+	// 	return
+	// }
+	// //
+	// r.pendingBlockMap[proposal.ID] = pendingBlock
+	// log.Debugf("[%v] %v microblocks are missing in id: %x", r.ID(), pendingBlock.MissingCount(), proposal.ID)
+	// for _, mbid := range pendingBlock.MissingMBList() {
+	// 	r.missingMBs[mbid] = proposal.ID
+	// 	log.Debugf("[%v] a microblock is missing, id: %x", r.ID(), mbid)
+	// }
+	// if config.Configuration.MemType == "ack" { //如果是ack内存池，就先把已有的交付
+	// 	block = blockchain.BuildBlock(pendingBlock.Proposal, pendingBlock.Payload)
+	// 	r.eventChan <- *block
+	// 	return
+	// }
+	// missingRequest := message.MissingMBRequest{
+	// 	RequesterID:   r.ID(),
+	// 	ProposalID:    proposal.ID,
+	// 	MissingMBList: pendingBlock.MissingMBList(),
+	// }
+	// r.Send(proposal.Proposer, missingRequest)
+
 	r.receivedNo++
 	r.startSignal()
 	r.totalProposeDuration += time.Now().Sub(proposal.Timestamp)
 	log.Debugf("[%v] received a proposal from %v, containing %v microblocks, view is %v, id: %x, prevID: %x", r.ID(), proposal.Proposer, len(proposal.HashList), proposal.View, proposal.ID, proposal.PrevID)
-	//if config.Configuration.MemType == "time" {
-	//	ack := message.Ack{
-	//		SentTime: proposal.Timestamp,
-	//		AckTime:  time.Now(),
-	//		Receiver: r.ID(),
-	//		ID:       proposal.ID,
-	//		Type:     "p",
-	//	}
-	//	r.Send(proposal.Proposer, ack)
-	//}
 	r.totalBlockSize += len(proposal.HashList)
-	pendingBlock := r.sm.FillProposal(&proposal)
-	//pendingBlock := r.sm.FillProposalByGroup(&proposal)
-	if config.Configuration.MemType == "ack" {
-		if !r.verifySigs(pendingBlock.Payload.SigMap) {
-			log.Warningf("[%v] received an block %x with invalid sigs for microblocks", r.ID(), proposal.ID)
-		}
-	}
+	pendingBlock := r.sm.FetchMB(&proposal)
 	block := pendingBlock.CompleteBlock() //看一下有没有缺的
 	if block != nil {
 		log.Debugf("[%v] a block is ready, view: %v, id: %x", r.ID(), proposal.View, proposal.ID)
 		r.eventChan <- *block
 		return
 	}
-	//
-	r.pendingBlockMap[proposal.ID] = pendingBlock
-	log.Debugf("[%v] %v microblocks are missing in id: %x", r.ID(), pendingBlock.MissingCount(), proposal.ID)
-	for _, mbid := range pendingBlock.MissingMBList() {
-		r.missingMBs[mbid] = proposal.ID
-		log.Debugf("[%v] a microblock is missing, id: %x", r.ID(), mbid)
-	}
-	if config.Configuration.MemType == "ack" { //如果是ack内存池，就先把已有的交付
-		block = blockchain.BuildBlock(pendingBlock.Proposal, pendingBlock.Payload)
-		r.eventChan <- *block
-		return
-	}
-	missingRequest := message.MissingMBRequest{
-		RequesterID:   r.ID(),
-		ProposalID:    proposal.ID,
-		MissingMBList: pendingBlock.MissingMBList(),
-	}
-	r.Send(proposal.Proposer, missingRequest)
+}
+
+func (r *Replica) HandleStable(stable blockchain.Stable) {
+	r.sm.AddStable(&stable)
 }
 
 // HandleMicroblock handles microblocks from replicas
@@ -246,6 +284,10 @@ func (r *Replica) HandleMicroblock(mb blockchain.MicroBlock) {
 		return
 	}
 	defer r.kickOff()
+	if config.GetConfig().BroadcastByGroup == true && r.gm.IsInMyGroup(mb.GroupId) {
+		r.totaRealDissminationTime += time.Now().Sub(mb.Timestamp)
+		r.totalRealMBS++
+	}
 	r.totalDisseminationTime += time.Now().Sub(mb.Timestamp)
 	if mb.Sender.Node() <= config.Configuration.SlowNo {
 		r.totalSlowDisemminationDur += time.Now().Sub(mb.Timestamp)
@@ -255,25 +297,14 @@ func (r *Replica) HandleMicroblock(mb blockchain.MicroBlock) {
 	r.totalMicroblocks++
 	mb.FutureTimestamp = time.Now()
 
+	//这个是proposal丢失逻辑
 	log.Debugf("[%v] received a microblock, id: %x", r.ID(), mb.Hash)
-	proposalID, exists := r.missingMBs[mb.Hash]
-	if exists {
+	// proposalID, exists := r.missingMBs[mb.Hash]
+	if mb.IsRequested {
+		//是丢失块,调用丢失处理逻辑 TODO:处理丢失请求的函数
 		log.Debugf("[%v] a missing mb for proposal is found", r.ID())
-		pd, exists := r.pendingBlockMap[proposalID]
-		if exists {
-			log.Debugf("[%v] received a microblock %x for pending proposal %x", r.ID(), mb.Hash, proposalID)
-			r.missingMicroblocks++
-			block := pd.AddMicroblock(&mb)
-			if block != nil {
-				log.Debugf("[%v] a block is ready, view: %v, id: %x", r.ID(), pd.Proposal.View, pd.Proposal.ID)
-				delete(r.pendingBlockMap, mb.ProposalID)
-				delete(r.missingMBs, mb.Hash)
-				if config.Configuration.Gossip == true && config.Configuration.MemType == "ack" {
-					return
-				}
-				r.eventChan <- *block
-			}
-		}
+		r.sm.HandleMissingStableMb(&mb)
+		r.ex.MissReceive <- &mb
 	} else {
 		err := r.sm.AddMicroblock(&mb)
 		if err != nil {
@@ -286,11 +317,15 @@ func (r *Replica) HandleMicroblock(mb blockchain.MicroBlock) {
 			//} else {
 			//	r.Broadcast(ack)
 			//}
-			leader := r.GetCurrentLeader()
+			//leader := r.GetCurrentLeader()
 			ack := blockchain.MakeAck(r.ID(), mb.Hash)
-			if leader != r.ID() {
-				log.Debugf("[%v] receive a mb, reply ack to [%v]", r.ID(), mb.ProposalID)
-				r.Send(leader, blockchain.MakeAck(r.ID(), mb.Hash))
+			if config.GetConfig().BroadcastByGroup == true && !r.gm.IsInMyGroup(mb.GroupId) {
+				ack.OutGroup = true
+			}
+			if mb.Sender != r.ID() {
+				//??写错了吧，为啥不是给微块的创建者发
+				log.Debugf("[%v] receive a mb, reply ack to [%v]", r.ID(), mb.Sender)
+				r.Send(mb.Sender, blockchain.MakeAck(r.ID(), mb.Hash))
 			} else {
 				r.HandleAck(*ack)
 			}
@@ -310,6 +345,29 @@ func (r *Replica) HandleMissingMBRequest(mbr message.MissingMBRequest) {
 		} else {
 			log.Errorf("[%v] a requested microblock is not found in mempool, id: %x", r.ID(), mbid)
 		}
+	}
+}
+
+//lxx写的，重传对方没收到的stable块
+func (r *Replica) HandleMissingStableMb(mbr message.MissingStableMBRequest) {
+	log.Debugf("[%v] missing microblocks request is received from %v, missing mbs are: %v", r.ID(), mbr.RequesterID, mbr.MbID)
+	// r.missingCounts[mbr.RequesterID] += len(mbr.MissingMBList)
+	// for _, mbid := range mbr.MissingMBList {
+	// 	found, mb := r.sm.FindMicroblock(mbid)
+	// 	log.Debugf("[%v] id: %x", r.ID(), mbid)
+	// 	if found {
+	// 		mb.IsRequested = true
+	// 		r.Send(mbr.RequesterID, mb)
+	// 	} else {
+	// 		log.Errorf("[%v] a requested microblock is not found in mempool, id: %x", r.ID(), mbid)
+	// 	}
+	// }
+	found, mb := r.sm.FindMicroblock(mbr.MbID)
+	if found {
+		mb.IsRequested = true
+		r.Send(mbr.RequesterID, mb)
+	} else {
+		log.Errorf("[%v] a requested microblock is not found in mempool, id: %x", r.ID(), mbr.MbID)
 	}
 }
 
@@ -339,8 +397,17 @@ func (r *Replica) HandleAck(ack blockchain.Ack) {
 	r.processAcks(&ack)
 }
 
+func (r *Replica) handleResult(result execute.ExecuteResult) {
+	log.Debugf("[%v] received result from %v", r.ID(), result.PropsalId)
+	r.eventChan <- result
+}
+
+var queryMu sync.Mutex
+
 // handleQuery replies a query with the statistics of the node
 func (r *Replica) handleQuery(m message.Query) {
+	queryMu.Lock()
+	defer queryMu.Unlock()
 	//realAveProposeTime := float64(r.totalProposeDuration.Milliseconds()) / float64(r.processedNo)
 	//aveProcessTime := float64(r.totalProcessDuration.Milliseconds()) / float64(r.processedNo)
 	//aveVoteProcessTime := float64(r.totalVoteTime.Milliseconds()) / float64(r.roundNo)
@@ -350,12 +417,16 @@ func (r *Replica) handleQuery(m message.Query) {
 	//aveRoundTime := float64(r.totalRoundTime.Milliseconds()) / float64(r.roundNo)
 	//aveProposeTime := aveRoundTime - aveProcessTime - aveVoteProcessTime
 	//latency := float64(r.totalDelay.Milliseconds()) / float64(r.latencyNo)
-	r.thrus += fmt.Sprintf("Time: %v s.TotalTx: %v, Throughput: %v txs/s. Delay: %v ms. Ave TxExecuted's Delay: %v ms.\n",
+	r.thrus += fmt.Sprintf("Time:%v TxPool:%v StableMbPerSecond:%v StableDelay:%v, TotalTx:%v TotalExectuedTx:%v Throughput:%v Delay:%v AveTxExecutedDelay:%v\n",
 		time.Now().Sub(r.startTime).Seconds(),
+		r.Pool.TxLen(),
+		float64(r.sm.TotalStableMb())/time.Now().Sub(r.startTime).Seconds(),
+		float64(r.sm.TotalStableTime().Milliseconds())/float64(r.sm.TotalStableMb()),
 		r.totalTx,
-		float64(r.totalCommittedTx)/time.Now().Sub(r.tmpTime).Seconds(), //tps
-		float64(r.totalDelay.Milliseconds())/float64(r.latencyNo),       //delay
-		r.ex.Delay(), //执行时延
+		r.ex.TotalNum(),
+		float64(r.totalCommittedTx)/time.Now().Sub(r.tmpTime).Seconds(), //tps 从收到proposal开始计时
+		float64(r.totalDelay.Milliseconds())/float64(r.latencyNo),       //delay 交易从被提出到确认的时间
+		r.ex.DelayForQuery(), //执行时延
 	)
 	r.totalCommittedTx = 0
 	r.tmpTime = time.Now()
@@ -368,6 +439,10 @@ func (r *Replica) handleQuery(m message.Query) {
 	aveHops := float64(r.totalHops) / float64(r.totalCommittedMBs)
 	aveProposeTime := float64(r.totalProposeDuration.Milliseconds()) / float64(r.receivedNo)
 	aveDisseminationTime := float64(r.totalDisseminationTime.Milliseconds()) / float64(r.totalMicroblocks)
+	aveRealDissTime := aveDisseminationTime
+	if config.GetConfig().BroadcastByGroup == true {
+		aveRealDissTime = float64(r.totaRealDissminationTime.Milliseconds()) / float64(r.totalRealMBS)
+	}
 	aveSlowDisseminationTime := float64(r.totalSlowDisemminationDur.Milliseconds()) / float64(r.totalSlowMBs)
 	r.totalSlowDisemminationDur = 0
 	r.totalSlowMBs = 0
@@ -375,9 +450,60 @@ func (r *Replica) handleQuery(m message.Query) {
 	mbRate := float64(r.sm.TotalMB()) / time.Now().Sub(r.startTime).Seconds()
 	//status := fmt.Sprintf("chain status is: %s\nCommitted rate is %v.\nAve. block size is %v.\nAve. trans. delay is %v ms.\nAve. creation time is %f ms.\nAve. processing time is %v ms.\nAve. vote time is %v ms.\nRequest rate is %f txs/s.\nAve. round time is %f ms.\nLatency is %f ms.\nThroughput is %f txs/s.\n", r.Safety.GetChainStatus(), committedRate, aveBlockSize, aveTransDelay, aveCreateDuration, aveProcessTime, aveVoteProcessTime, requestRate, aveRoundTime, latency, throughput)
 	//status := fmt.Sprintf("Ave. actual proposing time is %v ms.\nAve. proposing time is %v ms.\nAve. processing time is %v ms.\nAve. vote time is %v ms.\nAve. block size is %v.\nAve. round time is %v ms.\nLatency is %v ms.\n", realAveProposeTime, aveProposeTime, aveProcessTime, aveVoteProcessTime, aveBlockSize, aveRoundTime, latency)
-	status := fmt.Sprintf("Ave. View Time: %vms\nAve. Propose Time: %vms\nAve. Dissemination Time: %vms, slow dissemination time: %v\nAve. Creation Time: %v, a proposal contains %v microblocks\nAve. Vote Time: %vms\nAve. Tx Rate: %v\nAve. MB Rate: %v, an MB contains %v txs\nRedundant microblocks:%v\nTotal microblocks: %v, Remaining microblocks: %v\nTotal missing microblocks: %v\nTotoal proposed microblocks:%v\nAve. hops:%v\nSend Rate: %v Mbps\nRecv Rate: %v Mbps\nTotal txs: %v, Remaining txs: %v\n, StableMb :%v, PendingMb : %v\n%s\n",
-		aveRoundTime, aveProposeTime, aveDisseminationTime, aveSlowDisseminationTime, aveCreationTime, aveBlockSize, aveVoteTime, aveTxRate, mbRate, r.txNoInMB, r.totalRedundantMBs, r.sm.TotalMB(), r.sm.RemainingMB(), r.missingMicroblocks, r.totalProposedMBs, aveHops, r.SendRate(), r.RecvRate(), r.sm.TotalTx(), r.sm.RemainingTx(), r.sm.StableMB(), r.sm.PendingMB(), r.thrus)
+	status := fmt.Sprintf(" Leader:%v\n Ave Real Time:%v\n. Ave. View Time: %vms\nAve. Propose Time: %vms\nAve. Dissemination Time: %vms, slow dissemination time: %v\nAve. Creation Time: %v, a proposal contains %v microblocks\nAve. Vote Time: %vms\nAve. Tx Rate: %v\nAve. MB Rate: %v, an MB contains %v txs\nRedundant microblocks:%v\nTotal microblocks: %v, Remaining microblocks: %v\nTotal missing microblocks: %v\nTotoal proposed microblocks:%v\nAve. hops:%v\nSend Rate: %v Mbps\nRecv Rate: %v Mbps\nTotal txs: %v, Remaining txs: %v\n, StableMb :%v, PendingMb : %v\n%s\n",
+		r.GetCurrentLeader(), aveRealDissTime, aveRoundTime, aveProposeTime, aveDisseminationTime, aveSlowDisseminationTime, aveCreationTime, aveBlockSize, aveVoteTime, aveTxRate, mbRate, r.txNoInMB, r.totalRedundantMBs, r.sm.TotalMB(), r.sm.RemainingMB(), r.missingMicroblocks, r.totalProposedMBs, aveHops, r.SendRate(), r.RecvRate(), r.sm.TotalTx(), r.sm.RemainingTx(), r.sm.StableMB(), r.sm.PendingMB(), r.thrus)
 	m.Reply(message.QueryReply{Info: status})
+}
+
+// 将结果保存到日志中
+func (r *Replica) saveQuery() {
+	queryMu.Lock()
+	defer queryMu.Unlock()
+	//realAveProposeTime := float64(r.totalProposeDuration.Milliseconds()) / float64(r.processedNo)
+	//aveProcessTime := float64(r.totalProcessDuration.Milliseconds()) / float64(r.processedNo)
+	//aveVoteProcessTime := float64(r.totalVoteTime.Milliseconds()) / float64(r.roundNo)
+	aveBlockSize := float64(r.totalBlockSize) / float64(r.proposedNo+r.receivedNo)
+	//requestRate := float64(r.sm.TotalReceivedTxNo()) / time.Now().Sub(r.startTime).Seconds()
+	//committedRate := float64(r.committedNo) / time.Now().Sub(r.startTime).Seconds()
+	//aveRoundTime := float64(r.totalRoundTime.Milliseconds()) / float64(r.roundNo)
+	//aveProposeTime := aveRoundTime - aveProcessTime - aveVoteProcessTime
+	//latency := float64(r.totalDelay.Milliseconds()) / float64(r.latencyNo)
+	r.thrus += fmt.Sprintf("Time:%v TxPool:%v StableMbPerSecond:%v StableDelay:%v, TotalTx:%v TotalExectuedTx:%v Throughput:%v Delay:%v AveTxExecutedDelay:%v\n",
+		time.Now().Sub(r.startTime).Seconds(),
+		r.Pool.TxLen(),
+		float64(r.sm.TotalStableMb())/time.Now().Sub(r.startTime).Seconds(),
+		float64(r.sm.TotalStableTime().Milliseconds())/float64(r.sm.TotalStableMb()),
+		r.totalTx,
+		r.ex.TotalNum(),
+		float64(r.totalCommittedTx)/time.Now().Sub(r.tmpTime).Seconds(), //tps 从收到proposal开始计时
+		float64(r.totalDelay.Milliseconds())/float64(r.latencyNo),       //delay 交易从被提出到确认的时间
+		r.ex.DelayForQuery(), //执行时延
+	)
+	r.totalCommittedTx = 0
+	r.tmpTime = time.Now()
+	r.totalDelay = 0
+	r.latencyNo = 0
+	r.ex.Reset()
+	aveCreationTime := float64(r.totalCreateDuration.Milliseconds()) / float64(r.proposedNo)
+	aveTxRate := float64(r.sm.TotalTx()) / time.Now().Sub(r.startTime).Seconds()
+	aveRoundTime := float64(r.totalRoundTime.Milliseconds()) / float64(r.roundNo)
+	aveHops := float64(r.totalHops) / float64(r.totalCommittedMBs)
+	aveProposeTime := float64(r.totalProposeDuration.Milliseconds()) / float64(r.receivedNo)
+	aveDisseminationTime := float64(r.totalDisseminationTime.Milliseconds()) / float64(r.totalMicroblocks)
+	aveRealDissTime := aveDisseminationTime
+	if config.GetConfig().BroadcastByGroup == true {
+		aveRealDissTime = float64(r.totaRealDissminationTime.Milliseconds()) / float64(r.totalRealMBS)
+	}
+	aveSlowDisseminationTime := float64(r.totalSlowDisemminationDur.Milliseconds()) / float64(r.totalSlowMBs)
+	r.totalSlowDisemminationDur = 0
+	r.totalSlowMBs = 0
+	aveVoteTime := float64(r.totalVoteTime.Milliseconds()) / float64(r.voteNo)
+	mbRate := float64(r.sm.TotalMB()) / time.Now().Sub(r.startTime).Seconds()
+	//status := fmt.Sprintf("chain status is: %s\nCommitted rate is %v.\nAve. block size is %v.\nAve. trans. delay is %v ms.\nAve. creation time is %f ms.\nAve. processing time is %v ms.\nAve. vote time is %v ms.\nRequest rate is %f txs/s.\nAve. round time is %f ms.\nLatency is %f ms.\nThroughput is %f txs/s.\n", r.Safety.GetChainStatus(), committedRate, aveBlockSize, aveTransDelay, aveCreateDuration, aveProcessTime, aveVoteProcessTime, requestRate, aveRoundTime, latency, throughput)
+	//status := fmt.Sprintf("Ave. actual proposing time is %v ms.\nAve. proposing time is %v ms.\nAve. processing time is %v ms.\nAve. vote time is %v ms.\nAve. block size is %v.\nAve. round time is %v ms.\nLatency is %v ms.\n", realAveProposeTime, aveProposeTime, aveProcessTime, aveVoteProcessTime, aveBlockSize, aveRoundTime, latency)
+	status := fmt.Sprintf(" Leader:%v\n Ave Real Time:%v\n. Ave. View Time: %vms\nAve. Propose Time: %vms\nAve. Dissemination Time: %vms, slow dissemination time: %v\nAve. Creation Time: %v, a proposal contains %v microblocks\nAve. Vote Time: %vms\nAve. Tx Rate: %v\nAve. MB Rate: %v, an MB contains %v txs\nRedundant microblocks:%v\nTotal microblocks: %v, Remaining microblocks: %v\nTotal missing microblocks: %v\nTotoal proposed microblocks:%v\nAve. hops:%v\nSend Rate: %v Mbps\nRecv Rate: %v Mbps\nTotal txs: %v, Remaining txs: %v\n, StableMb :%v, PendingMb : %v\n%s\n",
+		r.GetCurrentLeader(), aveRealDissTime, aveRoundTime, aveProposeTime, aveDisseminationTime, aveSlowDisseminationTime, aveCreationTime, aveBlockSize, aveVoteTime, aveTxRate, mbRate, r.txNoInMB, r.totalRedundantMBs, r.sm.TotalMB(), r.sm.RemainingMB(), r.missingMicroblocks, r.totalProposedMBs, aveHops, r.SendRate(), r.RecvRate(), r.sm.TotalTx(), r.sm.RemainingTx(), r.sm.StableMB(), r.sm.PendingMB(), r.thrus)
+	r.result = status
 }
 
 func (r *Replica) handleTxn(m message.Transaction) {
@@ -444,6 +570,168 @@ func (r *Replica) handleTxn(m message.Transaction) {
 		}
 	}
 	r.kickOff()
+}
+
+//后台监控交易池情况，如果交易池数量大于msize，生成一个mb，并广播
+func (r *Replica) observePool() {
+	payloadsize := config.GetConfig().PayloadSize
+	msize := config.GetConfig().MSize
+	nums := msize / payloadsize //一个微块包含多少个交易
+
+	go func() {
+		for {
+			for i := 0; i < config.GetConfig().Mb_broadcast; i++ {
+				r.mbBroadcast <- struct{}{}
+			}
+			time.Sleep(1 * time.Second)
+		}
+	}()
+
+	for {
+		<-r.Pool.FetchSignal
+		if r.Pool.TxLen() > nums {
+			log.Warningf("before fetchTx, len:%v", r.Pool.TxLen())
+			txs := r.Pool.FetchTx(nums)
+			log.Warningf("after fetchTx, len:%v", r.Pool.TxLen())
+			isbuilt, mb := r.sm.GenerateMb(txs)
+			if isbuilt {
+				//构建微块并且广播
+				log.Debugf("[%v] built mb from pool, txs size %v", r.ID(), len(mb.Txns))
+				//log.Debugf("%+v", mb)
+				r.txNoInMB = len(mb.Txns)
+				mb.Sender = r.ID()
+				r.sm.AddMicroblock(mb)
+				mb.Timestamp = time.Now()
+				r.totalMicroblocks++
+				r.totalProposedMBs++
+
+				//限制广播
+				<-r.mbBroadcast
+				log.Warningf("广播微块")
+
+				if config.Configuration.LoadBalance == false {
+					if r.isByz && config.Configuration.Strategy == "missing" {
+						if config.Configuration.MemType == "naive" {
+							r.Send(r.GetCurrentLeader(), mb)
+						} else if config.Configuration.MemType == "ack" {
+							r.MulticastQuorum(r.randomPick(), mb)
+
+						}
+					} else {
+						if config.Configuration.BroadcastByGroup == true {
+							log.Debugf("处理微块")
+							mb1 := *mb
+							//log.Debugf("mb1's tx:len%v", len(mb1.Txns[0].Command.Value))
+							//log.Debugf("mb's tx:len%v", len(mb.Txns[0].Command.Value))
+							//模拟随机生成
+							groupId := mb.GroupId
+							groupList := r.gm.GetGroupListByGroupId(groupId)
+							r.BroadcastByGroup(mb, &mb1, groupList) //3f+1 -> 2f+1 block f hash
+						} else {
+							r.Broadcast(mb)
+						}
+					}
+				} else {
+					//loadbalance == true
+					mb.Hops++
+					r.selfMBChan <- *mb
+				}
+			} else {
+				log.Warningf("build mb failed")
+			}
+		}
+	}
+
+}
+
+func (r *Replica) benchmark() {
+	model := config.GetConfig().Model
+	var wg sync.WaitGroup
+	if model == "exp1" {
+		//交易频繁冷启动
+		ticker := time.NewTicker(5 * time.Second)
+		timerForEnd := time.NewTimer(time.Duration(config.GetConfig().Time) * time.Second)
+		wg.Add(1)
+		go func() {
+		DNOE:
+			for {
+				select {
+				case <-ticker.C:
+					log.Warningf("before add tx, len %v", r.Pool.TxLen())
+					r.Pool.AddTx(10000)
+					log.Warningf("before add tx, len %v", r.Pool.TxLen())
+				case <-timerForEnd.C:
+					break DNOE
+				default:
+					continue
+				}
+			}
+			wg.Done()
+		}()
+	} else if model == "exp2" {
+		//交易小规模持续到达
+		ticker := time.NewTicker(1 * time.Second)
+		timerForEnd := time.NewTimer(time.Duration(config.GetConfig().Time) * time.Second)
+		wg.Add(1)
+		go func() {
+		DNOE:
+			for {
+				select {
+				case <-ticker.C:
+					log.Warningf("add tx")
+					r.Pool.AddTx(config.GetConfig().TxPerSecond)
+				case <-timerForEnd.C:
+					break DNOE
+				default:
+					continue
+				}
+			}
+			wg.Done()
+		}()
+	} else if model == "exp3" {
+		//大规模持续到达
+		ticker := time.NewTicker(1 * time.Second)
+		timerForEnd := time.NewTimer(time.Duration(config.GetConfig().Time) * time.Second)
+		wg.Add(1)
+		go func() {
+		DNOE:
+			for {
+				select {
+				case <-ticker.C:
+					log.Warningf("add tx")
+					r.Pool.AddTx(10000) //增加1w笔交易
+				case <-timerForEnd.C:
+					break DNOE
+				default:
+					continue
+				}
+			}
+			wg.Done()
+		}()
+	} else if model == "exp4" {
+		//压满交易池后开始共识
+		ticker := time.NewTicker(3 * time.Second)
+		timerForEnd := time.NewTimer(30 * time.Second)
+		wg.Add(1)
+		go func() {
+		DNOE:
+			for {
+				select {
+				case <-ticker.C:
+					log.Warningf("add tx")
+					r.Pool.AddTx(100000) //增加1w笔交易
+				case <-timerForEnd.C:
+					break DNOE
+				default:
+					continue
+				}
+			}
+			wg.Done()
+		}()
+	}
+
+	wg.Wait()
+	log.Resultf("exp stop")
 }
 
 func (r *Replica) kickOff() {
@@ -564,12 +852,12 @@ func (r *Replica) pickFanoutNodes(mb *blockchain.MicroBlock) []identity.NodeID {
 /* Processors */
 
 func (r *Replica) processCommittedBlock(block *blockchain.Block) {
+	// log.Debugf("提交区块%v", *&block.MicroblockList()[1].Hash)
+	// log.Debugf("提交区块%v", *&block.MicroblockList()[10].Hash)
 	var txCount int
 	r.totalCommittedMBs += len(block.MicroblockList())
 	for _, mb := range block.MicroblockList() {
 		txCount += len(mb.Txns)
-		//***原始逻辑***
-		go r.ex.ExecuteForSerial(mb) //后台执行已提交的微块
 		for _, txn := range mb.Txns {
 			// only record the delay of transactions from the local memory pool
 			delay := time.Now().Sub(txn.Timestamp)
@@ -579,14 +867,32 @@ func (r *Replica) processCommittedBlock(block *blockchain.Block) {
 			r.totalTx++
 		}
 		r.totalHops += mb.Hops
-		//err := r.sm.RemoveMicroblock(mb.Hash)
-		//if err != nil {
-		//	log.Debugf("[%v] processing committed block err: %w", r.ID(), err)
-		//}
 	}
 	r.committedNo++
 	log.Infof("[%v] the block is committed, No. of microblocks: %v, No. of tx: %v, view: %v, current view: %v, id: %x",
 		r.ID(), len(block.MicroblockList()), txCount, block.View, r.pm.GetCurView(), block.ID)
+
+	deliver := make([]*blockchain.MicroBlock, 0)
+	lastGroupid := -1
+	for i := 0; i < len(block.MicroblockList()); i++ {
+		if i == 0 {
+			deliver = append(deliver, block.MicroblockList()[i])
+			lastGroupid = block.MicroblockList()[i].GroupId
+		} else {
+			curId := block.MicroblockList()[i].GroupId
+			if curId == lastGroupid {
+				deliver = append(deliver, block.MicroblockList()[i])
+			} else {
+				r.ex.MbReceive <- deliver                   //遇到第一个不同的，把之前的先交付
+				deliver = make([]*blockchain.MicroBlock, 0) //重新构造deliver数组
+				deliver = append(deliver, block.MicroblockList()[i])
+				lastGroupid = block.MicroblockList()[i].GroupId
+			}
+		}
+	}
+	if len(deliver) != 0 {
+		r.ex.MbReceive <- deliver
+	}
 }
 
 func (r *Replica) processForkedBlock(block *blockchain.Block) {
@@ -626,28 +932,35 @@ func (r *Replica) processAcks(ack *blockchain.Ack) {
 			}
 		}
 		r.sm.AddAck(ack)
-		found, _ := r.sm.FindMicroblock(ack.MicroblockID)
-		if !found && r.sm.IsStable(ack.MicroblockID) {
-			missingRequest := message.MissingMBRequest{
-				RequesterID:   r.ID(),
-				MissingMBList: []crypto.Identifier{ack.MicroblockID},
-			}
-			r.Send(ack.Receiver, missingRequest)
-			log.Debugf("[%v] has received enough acks, but not received the microblock id: %x, fetch from %v",
-				r.ID(), ack.MicroblockID, ack.Receiver)
-		}
+		// found, _ := r.sm.FindMicroblock(ack.MicroblockID)
+		// if !found && r.sm.IsStable(ack.MicroblockID) {
+		// 	//没找到ack的微块，这应该是不可能的吧。。
+		// 	missingRequest := message.MissingMBRequest{
+		// 		RequesterID:   r.ID(),
+		// 		MissingMBList: []crypto.Identifier{ack.MicroblockID},
+		// 	}
+		// 	r.Send(ack.Receiver, missingRequest)
+		// 	log.Debugf("[%v] has received enough acks, but not received the microblock id: %x, fetch from %v",
+		// 		r.ID(), ack.MicroblockID, ack.Receiver)
+		// }
 	}
+}
+
+//处理其他节点的stable消息
+func (r *Replica) proceseStable(stable blockchain.Stable) {
+
 }
 
 func (r *Replica) proposeBlock(view types.View) {
 	createStart := time.Now()
 	//time.Sleep(time.Duration(config.Configuration.ProposeTime) * time.Millisecond)
 	payload := r.sm.GeneratePayload()
+
 	// if we are using time-based shared mempool, wait until all the microblocks are stable
 	//if config.Configuration.MemType == "time" {
 	//	r.waitUntilStable(payload)
 	//}
-	proposal := r.Safety.MakeProposal(view, payload.GenerateHashList())
+	proposal := r.Safety.MakeProposal(view, payload.GenerateHashList(), payload.GenerateGroupList(), payload.AckNode)
 	log.Debugf("[%v] is making a proposal for view %v, containing %v microblocks, %v left,id:%x", proposal.Proposer, proposal.View, len(proposal.HashList), r.sm.RemainingMB(), proposal.ID)
 	//log.Debugf("[%v] contained microblocks are", r.ID())
 	//for _, id := range proposal.HashList {
@@ -746,6 +1059,40 @@ func (r *Replica) ListenCommittedBlocks() {
 	}
 }
 
+//每隔1s保存一次结果
+func (r *Replica) saveResult() {
+	ticker := time.NewTicker(1 * time.Second)
+	done := make(chan bool)
+
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				// 在这里调用您的函数
+				r.saveQuery()
+			}
+		}
+	}()
+
+	//持续监听ns
+	time.Sleep(time.Duration(config.GetConfig().Time) * time.Second)
+	ticker.Stop()
+	done <- true
+	log.Resultf("nodesize:%v,byz:%v,group:%v,cold:%v,mbsize:%v,txsize:%v,txsInMb:%v,TxPerSecond:%v",
+		config.GetConfig().N(),
+		config.GetConfig().ByzNo,
+		config.GetConfig().BroadcastByGroup,
+		config.GetConfig().Benchmark.Cold,
+		config.GetConfig().MSize,
+		config.GetConfig().PayloadSize,
+		config.GetConfig().MSize/config.GetConfig().PayloadSize,
+		config.GetConfig().TxPerSecond,
+	)
+	log.Resultf(r.result)
+}
+
 func (r *Replica) startSignal() {
 	if !r.isStarted.Load() {
 		r.startTime = time.Now()
@@ -758,14 +1105,22 @@ func (r *Replica) startSignal() {
 
 // Start starts event loop
 func (r *Replica) Start() {
+
 	go r.Run()
 	//go r.gossip()
 	go r.loadbalance() //负载均衡用
+
+	//交易执行其
+	go r.ex.HandleMB()
+	//模拟交易
+	go r.benchmark()
+	go r.observePool()
 
 	// wait for the start signal
 	<-r.start
 	go r.ListenLocalEvent()
 	go r.ListenCommittedBlocks()
+
 	for r.isStarted.Load() {
 		event := <-r.eventChan
 		switch v := event.(type) {
@@ -785,6 +1140,9 @@ func (r *Replica) Start() {
 			//r.voteNo++
 		case pacemaker.TMO:
 			r.Safety.ProcessRemoteTmo(&v)
+		case execute.ExecuteResult:
+			//收到执行结果
+			r.ex.ReceiveResult <- &v
 		default:
 			log.Errorf("[%v] received an unknown event %v", r.ID(), v)
 		}

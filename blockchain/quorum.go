@@ -18,10 +18,20 @@ type Vote struct {
 	crypto.Signature
 }
 
+type Stable struct {
+	AckInGroup     []identity.NodeID //组内ack
+	AckOutGroup    []identity.NodeID //组外ack
+	MicroblockID   crypto.Identifier //微块hash
+	Sender         identity.NodeID   //发送方
+	GroupId        int               //区块所在的组
+	MbCreationTime time.Time         //微块的创建时间
+}
+
 type Ack struct {
-	Receiver     identity.NodeID
+	Receiver     identity.NodeID //ack的发送者
 	MicroblockID crypto.Identifier
 	crypto.Signature
+	OutGroup bool //是否为组外节点回复
 }
 
 type QC struct {

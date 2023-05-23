@@ -9,6 +9,7 @@ import (
 	"github.com/gitferry/bamboo/config"
 	"github.com/gitferry/bamboo/crypto"
 	"github.com/gitferry/bamboo/election"
+	"github.com/gitferry/bamboo/identity"
 	"github.com/gitferry/bamboo/log"
 	"github.com/gitferry/bamboo/node"
 	"github.com/gitferry/bamboo/pacemaker"
@@ -109,7 +110,7 @@ func (hs *HotStuff) ProcessBlock(block *blockchain.Block) error {
 	} else {
 		log.Debugf("[%v] vote is sent to %v, id: %x", hs.ID(), voteAggregator, vote.BlockID)
 		vote.Timestamp = time.Now()
-		hs.Send(voteAggregator, vote)
+		hs.Send2(voteAggregator, vote)
 	}
 	b, ok := hs.bufferedBlocks[block.View]
 	if ok {
@@ -165,13 +166,13 @@ func (hs *HotStuff) ProcessLocalTmo(view types.View) {
 		NodeID: hs.ID(),
 		HighQC: hs.GetHighQC(),
 	}
-	hs.Broadcast(tmo)
+	hs.Broadcast2(tmo)
 	hs.ProcessRemoteTmo(tmo)
 }
 
-func (hs *HotStuff) MakeProposal(view types.View, payload []crypto.Identifier) *blockchain.Proposal {
+func (hs *HotStuff) MakeProposal(view types.View, payload []crypto.Identifier, groupList []int, ackNodeList []map[identity.NodeID]struct{}) *blockchain.Proposal {
 	qc := hs.forkChoice()
-	proposal := blockchain.BuildProposal(view, qc, qc.BlockID, payload, hs.ID())
+	proposal := blockchain.BuildProposal(view, qc, qc.BlockID, payload, groupList, ackNodeList, hs.ID())
 	return proposal
 }
 

@@ -1,7 +1,6 @@
 package node
 
 import (
-	"encoding/json"
 	"io"
 	"io/ioutil"
 	"math/rand"
@@ -9,9 +8,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/gitferry/bamboo/blockchain"
 	"github.com/gitferry/bamboo/config"
-	"github.com/gitferry/bamboo/execute"
 	"github.com/gitferry/bamboo/log"
 	"github.com/gitferry/bamboo/message"
 )
@@ -35,7 +32,7 @@ func (n *node) http() {
 	mux.HandleFunc("/slow", n.handleSlow)
 	mux.HandleFunc("/flaky", n.handleFlaky)
 	mux.HandleFunc("/crash", n.handleCrash)
-	mux.HandleFunc("/tx", n.handleTx)
+	//mux.HandleFunc("/tx", n.handleTx)
 
 	// http string should be in form of ":8080"
 	ip, err := url.Parse(config.Configuration.HTTPAddrs[n.id])
@@ -52,6 +49,18 @@ func (n *node) http() {
 }
 
 func (n *node) handleQuery(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	var query message.Query
+	query.C = make(chan message.QueryReply)
+	n.TxChan <- query
+	reply := <-query.C
+	_, err := io.WriteString(w, reply.Info)
+	if err != nil {
+		log.Error(err)
+	}
+}
+
+func (n *node) handleE(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 	var query message.Query
 	query.C = make(chan message.QueryReply)
@@ -89,27 +98,27 @@ func (n *node) handleRoot(w http.ResponseWriter, r *http.Request) {
 	//}
 }
 
-func (n *node) handleTx(w http.ResponseWriter, r *http.Request) {
-	var req message.Transaction
-	defer r.Body.Close()
+// func (n *node) handleTx(w http.ResponseWriter, r *http.Request) {
+// 	var req message.Transaction
+// 	defer r.Body.Close()
 
-	v, _ := ioutil.ReadAll(r.Body)
-	tx := Tx{}
-	err := json.Unmarshal(v, &tx)
-	if err != nil {
-		log.Debugf("err : %v", err)
-	}
-	req.Command.Value = v
-	req.NodeID = n.id
-	req.Timestamp = time.Now()
-	req.ID = r.RequestURI
-	//n.TxChan <- req
+// 	v, _ := ioutil.ReadAll(r.Body)
+// 	tx := Tx{}
+// 	err := json.Unmarshal(v, &tx)
+// 	if err != nil {
+// 		log.Debugf("err : %v", err)
+// 	}
+// 	req.Command.Value = v
+// 	req.NodeID = n.id
+// 	req.Timestamp = time.Now()
+// 	req.ID = r.RequestURI
+// 	//n.TxChan <- req
 
-	test_mb := new(blockchain.MicroBlock)
-	test_mb.Txns = append(test_mb.Txns, &req)
-	execute := execute.NewExecutor()
-	execute.ExecuteForParallel(test_mb)
-}
+// 	test_mb := new(blockchain.MicroBlock)
+// 	test_mb.Txns = append(test_mb.Txns, &req)
+// 	execute := execute.NewExecutor()
+// 	execute.ExecuteForParallel(test_mb)
+// }
 
 func (n *node) handleCrash(w http.ResponseWriter, r *http.Request) {
 	n.Socket.Crash(config.GetConfig().Crash)

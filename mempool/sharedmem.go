@@ -1,6 +1,8 @@
 package mempool
 
 import (
+	"time"
+
 	"github.com/gitferry/bamboo/blockchain"
 	"github.com/gitferry/bamboo/crypto"
 	"github.com/gitferry/bamboo/identity"
@@ -11,6 +13,13 @@ type SharedMempool interface {
 	// AddTxn adds a new transaction and returns a microblock if sufficient
 	// transactions are received
 	AddTxn(tx *message.Transaction) (bool, *blockchain.MicroBlock)
+
+	//从交易池生成微块
+	GenerateMb(txs []*message.Transaction) (bool, *blockchain.MicroBlock)
+	//处理别人的stable
+	AddStable(stable *blockchain.Stable)
+	//处理没有收到的stable块
+	HandleMissingStableMb(mb *blockchain.MicroBlock)
 
 	// AddMicroblock pushes a new microblock into a FIFO queue
 	AddMicroblock(mb *blockchain.MicroBlock) error
@@ -32,6 +41,8 @@ type SharedMempool interface {
 	// return missing list if there's any
 	FillProposal(p *blockchain.Proposal) *blockchain.PendingBlock
 
+	//lxx 根据payload取mb
+	FetchMB(p *blockchain.Proposal) *blockchain.PendingBlock
 	// FillProposal pulls microblocks from the mempool and build a pending block,
 	// return missing list if there's any
 	FillProposalFromGroup(p *blockchain.Proposal) *blockchain.PendingBlock
@@ -46,6 +57,10 @@ type SharedMempool interface {
 	AckList(id crypto.Identifier) []identity.NodeID
 
 	TotalTx() int64
+
+	TotalStableMb() int
+
+	TotalStableTime() time.Duration
 
 	RemainingTx() int64
 

@@ -123,7 +123,7 @@ func (nm *NaiveMem) GeneratePayload() *blockchain.Payload {
 		microblockList = append(microblockList, mb)
 	}
 
-	return blockchain.NewPayload(microblockList, nil)
+	return blockchain.NewPayload(microblockList, nil, nil)
 }
 
 // CheckExistence checks if the referred microblocks in the proposal exists

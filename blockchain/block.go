@@ -34,6 +34,7 @@ type Block struct {
 type Payload struct {
 	MicroblockList []*MicroBlock
 	SigMap         map[crypto.Identifier]map[identity.NodeID]crypto.Signature
+	AckNode        []map[identity.NodeID]struct{} //接收的节点
 }
 
 type MicroBlock struct {
@@ -44,6 +45,7 @@ type MicroBlock struct {
 	Timestamp       time.Time
 	FutureTimestamp time.Time
 	Sender          identity.NodeID
+	IsFake          bool //是否只是个空壳，还没有收到实际内容
 	IsRequested     bool
 	IsForward       bool
 	Bitmap          bitmap.Bitmap
@@ -52,7 +54,9 @@ type MicroBlock struct {
 
 type Proposal struct {
 	BlockHeader
-	HashList []crypto.Identifier
+	HashList  []crypto.Identifier
+	GroupList []int
+	AckNode   []map[identity.NodeID]struct{}
 }
 
 type PendingBlock struct {
@@ -70,21 +74,24 @@ type rawProposal struct {
 }
 
 // BuildProposal creates a signed proposal
-func BuildProposal(view types.View, qc *QC, prevID crypto.Identifier, payload []crypto.Identifier, proposer identity.NodeID) *Proposal {
+func BuildProposal(view types.View, qc *QC, prevID crypto.Identifier, payload []crypto.Identifier, groupList []int, ackNodeList []map[identity.NodeID]struct{}, proposer identity.NodeID) *Proposal {
 	p := new(Proposal)
 	p.View = view
 	p.Proposer = proposer
 	p.QC = qc
 	p.HashList = payload
 	p.PrevID = prevID
+	p.GroupList = groupList
+	p.AckNode = ackNodeList
 	p.makeID(proposer)
 	return p
 }
 
-func NewPayload(microblockList []*MicroBlock, sigs map[crypto.Identifier]map[identity.NodeID]crypto.Signature) *Payload {
+func NewPayload(microblockList []*MicroBlock, sigs map[crypto.Identifier]map[identity.NodeID]crypto.Signature, ackList []map[identity.NodeID]struct{}) *Payload {
 	return &Payload{
 		MicroblockList: microblockList,
 		SigMap:         sigs,
+		AckNode:        ackList,
 	}
 }
 
@@ -101,6 +108,17 @@ func (pl *Payload) GenerateHashList() []crypto.Identifier {
 		hashList = append(hashList, mb.Hash)
 	}
 	return hashList
+}
+
+func (pl *Payload) GenerateGroupList() []int {
+	groupList := make([]int, 0)
+	for _, mb := range pl.MicroblockList {
+		if mb == nil {
+			continue
+		}
+		groupList = append(groupList, mb.GroupId)
+	}
+	return groupList
 }
 
 func (pl *Payload) addMicroblock(mb *MicroBlock) {

@@ -65,24 +65,34 @@ func (b *Benchmark) Run() {
 	go b.collect(latencies)
 
 	for i := 0; i < b.Concurrency; i++ {
-		go b.worker(keys, latencies)
+		//go b.worker(keys, latencies)
 	}
 
 	b.db.Init()
 	b.startTime = time.Now()
 	if b.T > 0 {
 		timer := time.NewTimer(time.Second * time.Duration(b.T))
+		// timer_cold := time.NewTimer(time.Second * time.Duration(8))
+
 	loop:
 		for {
 			select {
 			case <-timer.C:
 				log.Infof("Benchmark stops")
 				break loop
+			// case <-timer_cold.C:
+			// 	if config.GetConfig().Benchmark.Cold == true {
+			// 		value := []byte{'s', 't', 'o', 'p'}
+			// 		b.db.Write(1, value)
+			// 	}
 			default:
 				b.wait.Add(1)
 				//log.Debugf("is generating key No.%v", j)
 				k := b.next()
 				genCount++
+				// if genCount%200 == 0 && config.GetConfig().Benchmark.Cold == true {
+				// 	time.Sleep(10 * time.Second)
+				// }
 				keys <- k
 				sendCount++
 				//log.Debugf("generated key No.%v", j-1)
@@ -123,7 +133,6 @@ func (b *Benchmark) worker(keys <-chan int, result chan<- time.Duration) {
 		//s = time.Now()
 		value := make([]byte, config.GetConfig().PayloadSize)
 		rand.Read(value)
-		//straus 2023 icde niujianyu
 		//rand.Read(value)
 		_ = b.db.Write(k, value)
 		//res, err := strconv.Atoi(r)

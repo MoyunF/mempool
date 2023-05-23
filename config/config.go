@@ -19,7 +19,8 @@ var configFile = flag.String("config", "config.json", "Configuration file for ba
 
 // Config contains every system configuration
 type Config struct {
-	Addrs     map[identity.NodeID]string `json:"address"`      // address for node communication
+	Addrs     map[identity.NodeID]string `json:"address"`      // address for mempool communication
+	Addrs2    map[identity.NodeID]string `json:"address2"`     // address for consensus communication
 	HTTPAddrs map[identity.NodeID]string `json:"http_address"` // address for client server communication
 
 	Policy    string  `json:"policy"`    // leader change policy {consecutive, majority}
@@ -67,6 +68,7 @@ type Config struct {
 	ForwardP         int             `json:"forward_p"`
 	D                int             `json:"d"`
 	BroadcastByGroup bool            `json:"broadcastBygroup"`
+	Onlyworker       bool            `json:"onlyworker"`
 
 	// zipfian distribution
 	ZipfianS float64 `json:"zipfian_s"` // zipfian s parameter
@@ -88,6 +90,15 @@ type Config struct {
 
 	GroupNum  int `json:"groupNum"`  //有多少分组
 	MemberNum int `json:"memberNum"` //分组中成员的数量 2f+1
+	Time      int `json:"time"`      //分组中成员的数量 2f+1
+
+	//交易池
+	Poolsize    int    `json:"poolsize"` //交易池大小
+	Model       string `json:"model"`    //交易到来模式仿真
+	TxPerSecond int    `json:"txPerSecond"`
+
+	//限制微块广播频率
+	Mb_broadcast int `json:"mb_broadcast"`
 }
 
 //var keys []crypto.PrivateKey
@@ -102,7 +113,7 @@ type Bconfig struct {
 	Concurrency  int    // number of simulated clients
 	Distribution string // distribution
 	// rounds       int    // repeat in many rounds sequentially
-
+	Cold bool //是否冷启动更多
 	// conflict distribution
 	Conflicts int // percentage of conflicting keys
 	Min       int // min key
@@ -232,10 +243,13 @@ func (c *Config) Load() {
 	for scanner.Scan() {
 		id := identity.NewNodeID(i)
 		port := strconv.Itoa(3734 + i)
+		port2 := strconv.Itoa(2628 + i)
 		addr := "tcp://" + scanner.Text() + ":" + port
+		addr2 := "tcp://" + scanner.Text() + ":" + port2
 		portHttp := strconv.Itoa(8069 + i)
 		addrHttp := "http://" + scanner.Text() + ":" + portHttp
 		c.Addrs[id] = addr
+		c.Addrs2[id] = addr2
 		c.HTTPAddrs[id] = addrHttp
 		i++
 	}

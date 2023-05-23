@@ -52,6 +52,11 @@ type MissingMBRequest struct {
 	MissingMBList []crypto.Identifier
 }
 
+type MissingStableMBRequest struct {
+	RequesterID identity.NodeID
+	MbID        crypto.Identifier
+}
+
 //type Ack struct {
 //SentTime time.Time
 //AckTime  time.Time
@@ -70,6 +75,10 @@ type ReadReply struct {
 
 // Query can be used as a special request that directly read the value of key without go through replication protocol in Replica
 type Query struct {
+	C chan QueryReply
+}
+
+type Status struct {
 	C chan QueryReply
 }
 

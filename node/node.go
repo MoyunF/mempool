@@ -47,7 +47,7 @@ func NewNode(id identity.NodeID, isByz bool) Node {
 	return &node{
 		id:     id,
 		isByz:  isByz,
-		Socket: socket.NewSocket(id, config.Configuration.Addrs),
+		Socket: socket.NewSocket(id, config.Configuration.Addrs, config.Configuration.Addrs2),
 		//Database:    NewDatabase(),
 		MessageChan: make(chan interface{}, config.Configuration.ChanBufferSize),
 		TxChan:      make(chan interface{}, config.Configuration.ChanBufferSize),
@@ -94,6 +94,7 @@ func (n *node) Run() {
 	if len(n.handles) > 0 {
 		go n.handle()
 		go n.recv()
+		go n.recv2()
 		go n.txn()
 	}
 	n.http()
@@ -116,6 +117,23 @@ func (n *node) txn() {
 func (n *node) recv() {
 	for {
 		m := n.Recv()
+		if n.isByz && config.GetConfig().Strategy == "silence" {
+			// perform silence attack
+			continue
+		}
+		switch m := m.(type) {
+		case message.Transaction:
+			n.TxChan <- m
+		default:
+			n.MessageChan <- m
+		}
+	}
+}
+
+//recv receives messages from socket and pass to message channel
+func (n *node) recv2() {
+	for {
+		m := n.Recv2()
 		if n.isByz && config.GetConfig().Strategy == "silence" {
 			// perform silence attack
 			continue

@@ -24,6 +24,8 @@ func initReplica(id identity.NodeID, isByz bool) {
 	}
 
 	r := replica.NewReplica(id, *algorithm, isByz)
+
+
 	r.Start()
 }
 
@@ -40,7 +42,7 @@ func main() {
 		config.Simulation()
 		for id := range config.GetConfig().Addrs {
 			isByz := false
-			if id.Node() <= config.GetConfig().ByzNo {
+			if id.Node() > (config.GetConfig().N() - config.GetConfig().ByzNo) {
 				isByz = true
 				log.Info("server %v is byz", id)
 			}
@@ -51,7 +53,7 @@ func main() {
 		setupDebug()
 		isByz := false
 		i, _ := strconv.Atoi(*id)
-		if i <= config.GetConfig().ByzNo {
+		if i > (config.GetConfig().N() - config.GetConfig().ByzNo) {
 			isByz = true
 		}
 		initReplica(identity.NodeID(*id), isByz)
