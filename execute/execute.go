@@ -36,8 +36,8 @@ type Executor struct {
 	executedTxsForQuery int            //每次查询清零，计算两次查询之间的数
 	delayTotal          time.Duration  //所有交易的执行时间
 	delayTotalForQuery  time.Duration  //每次查询清零
-	mbPending           mbList
 	gm                  *group.GroupManager
+	mbPending           mbList
 	lock                sync.Mutex
 	MbReceive           chan []*blockchain.MicroBlock
 	MissReceive         chan *blockchain.MicroBlock
@@ -52,6 +52,10 @@ type ExecuteResult struct {
 	Mb        mbHash           //执行成功的块hash
 	No        int              //微块顺序
 	Result    string           //区块执行后的状态
+
+	buildTime   time.Time //生成结果的时间
+	receiveTime time.Time //收到结果的时间
+	enableTime  time.Time //结果的时间
 }
 
 //区块执行队列
@@ -126,6 +130,7 @@ func (e *Executor) ExecuteThread() { //表示是有一个mb被成功执行
 					requestNode := make([]identity.NodeID, 0)
 
 					log.Debugf("当前需要我执行的mb:%v,没有，向组内节点要", mb.Hash)
+					//TODO:requestNode不全
 					requestNode = append(requestNode)
 					e.node.MulticastQuorum(requestNode, missStableRequest)
 					break
@@ -158,6 +163,8 @@ func (e *Executor) ExecuteThread() { //表示是有一个mb被成功执行
 				log.Debugf("区块%v结果执行完成，广播给其他节点", result.Mb)
 				//e.node.MulticastQuorum2(e.gm.NotInGroup(lastmb.GroupId), result)
 				e.node.Broadcast2(result)
+
+				//TODO: 将执行结果发给消息队列
 			}
 		}
 	} else {

@@ -17,6 +17,11 @@ import (
 	"github.com/gitferry/bamboo/utils"
 )
 
+/*
+	TODO: 区块打包策略： 贪心、随机、DP
+			后台线程计算最优
+			最优解计算次数打log记录时间
+*/
 type AckMem struct {
 	stableMicroblocks  *list.List
 	txnList            *list.List

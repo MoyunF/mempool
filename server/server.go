@@ -25,7 +25,6 @@ func initReplica(id identity.NodeID, isByz bool) {
 
 	r := replica.NewReplica(id, *algorithm, isByz)
 
-
 	r.Start()
 }
 

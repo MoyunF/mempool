@@ -10,6 +10,7 @@ import (
 	"github.com/gitferry/bamboo/crypto"
 	"github.com/gitferry/bamboo/execute"
 	"github.com/gitferry/bamboo/group"
+	"github.com/gitferry/bamboo/kafka"
 	"github.com/gitferry/bamboo/limiter"
 	"github.com/gitferry/bamboo/txpool"
 	"github.com/gitferry/bamboo/utils"
@@ -40,6 +41,8 @@ type Replica struct {
 	gm   *group.GroupManager
 	Pool *txpool.Txpool
 	/*for group by lxx*/
+
+	kafkaProducer *kafka.KafkaProducer
 
 	//estimator       *Estimator
 	start           chan bool // signal to start the node
@@ -140,6 +143,9 @@ func NewReplica(id identity.NodeID, alg string, isByz bool) *Replica {
 	r.otherMBChan = make(chan blockchain.MicroBlock, 1024)
 	r.mbSentNodes = make(map[crypto.Identifier]bitmap.Bitmap)
 	r.limiter = limiter.NewBucket(time.Duration(config.Configuration.FillInterval)*time.Millisecond, int64(config.Configuration.Capacity))
+	//消息队列
+	r.kafkaProducer, _ = kafka.NewKafkaProducer(config.GetConfig().MessageQueue.Address, config.GetConfig().MessageQueue.Topic)
+
 	memType := config.GetConfig().MemType
 	switch memType {
 	// case "naive":
@@ -410,6 +416,26 @@ func (r *Replica) handleQuery(m message.Query) {
 	status := fmt.Sprintf(" Leader:%v\n Ave Real Time:%v\n. Ave. View Time: %vms\nAve. Propose Time: %vms\nAve. Dissemination Time: %vms, slow dissemination time: %v\nAve. Creation Time: %v, a proposal contains %v microblocks\nAve. Vote Time: %vms\nAve. Tx Rate: %v\nAve. MB Rate: %v, an MB contains %v txs\nRedundant microblocks:%v\nTotal microblocks: %v, Remaining microblocks: %v\nTotal missing microblocks: %v\nTotoal proposed microblocks:%v\nAve. hops:%v\nSend Rate: %v Mbps\nRecv Rate: %v Mbps\nTotal txs: %v, Remaining txs: %v\n, StableMb :%v, PendingMb : %v\n%s\n",
 		r.GetCurrentLeader(), aveRealDissTime, aveRoundTime, aveProposeTime, aveDisseminationTime, aveSlowDisseminationTime, aveCreationTime, aveBlockSize, aveVoteTime, aveTxRate, mbRate, r.txNoInMB, r.totalRedundantMBs, r.sm.TotalMB(), r.sm.RemainingMB(), r.missingMicroblocks, r.totalProposedMBs, aveHops, r.SendRate(), r.RecvRate(), r.sm.TotalTx(), r.sm.RemainingTx(), r.sm.StableMB(), r.sm.PendingMB(), r.thrus)
 	m.Reply(message.QueryReply{Info: status})
+	log.Debugf("发送到消息队列中")
+	r.kafkaProducer.SendMessage(status)
+	log.Debugf("发送完成")
+}
+
+/*
+	区块执行效率统计：
+		1. 执行全部区块所用的时间
+		2. 交易执行数量随时间的变化曲线 间隔1s
+		3. 交易TPS = 执行成功的交易 / 时间
+		4. 交易时延 = 交易的总时延 / 交易数
+
+		每秒钟，发送当前成功执行的 节前时间戳点号 确认阈值 小块编号 小块执行完成时间 当
+		1. 全部小块执行成功后 / （t_最后一个小块的时间戳 - 小块被提交的提交时间）
+		2. 对时间戳进行四舍五入近似 或者 画平滑曲线
+		3. 对2的每个时间戳求TPS，取max
+		4. 对于每一个成功的小块：累加（t_小块的时间戳 - 小块被提交的提交时间）/ 小块数量
+*/
+func (r *Replica) sendExecutedResult() {
+		
 }
 
 // 将结果保存到日志中

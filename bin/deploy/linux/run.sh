@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+#用来在主机中启动collab主程序
 
 SERVER_PID_FILE=server.pid
 

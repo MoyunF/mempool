@@ -68,5 +68,9 @@
     "Zipfian_s": 2,
     "Zipfian_v": 1,
     "Lambda": 0.01
+  },
+  "kafka":{
+    "address":"8.130.35.70:9002",
+    "topic":"mempool"
   }
 }

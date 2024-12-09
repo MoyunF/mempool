@@ -51,6 +51,15 @@ type MicroBlock struct {
 	Bitmap          bitmap.Bitmap
 	Hops            int
 	CommittedNo     int
+
+	CreateTimeStamp      time.Time //小块被创建的时间
+	SendTimeStamp        time.Time //小块被发送的时间
+	ReceiveTimeStamp     time.Time //小块被收到的时间
+	CommittedTimeStamp   time.Time //小块被hotstuff提交的时间
+	ExecutStratTimeStamp time.Time //小块开始执行的时间
+	ExecuteEndTimeStamp  time.Time //小块执行结束的时间
+
+	RouteList []*types.Route //路由的列表
 }
 
 type Proposal struct {
@@ -185,8 +194,10 @@ func NewMicroblock(proposalID crypto.Identifier, txnList []*message.Transaction)
 	mb.ProposalID = proposalID
 	mb.Txns = txnList
 	mb.Timestamp = time.Now()
+	mb.CreateTimeStamp = time.Now()
 	mb.Hash = mb.hash()                        //根据交易生成Hash，但是好像不会验证hhhh
 	mb.GroupId = group.GenerateGroupIdByRand() //为mb增加group id
+	mb.RouteList = make([]*types.Route, 0, 10)
 	return mb
 }
 
