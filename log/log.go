@@ -63,6 +63,7 @@ type logger struct {
 
 	severity severity
 	dir      string
+	id       string //节点的编号
 }
 
 type buffer struct {
@@ -105,7 +106,7 @@ var log logger
 func init() {
 	flag.StringVar(&log.dir, "log_dir", "", "if empty, write log files in this directory")
 	flag.Var(&log.severity, "log_level", "logs at and above this level")
-
+	flag.StringVar(&log.id, "log_id", "0", "if empty, write 0 as the default num")
 	format := stdlog.Ldate | stdlog.Ltime | stdlog.Lmicroseconds | stdlog.Lshortfile
 	log.debug = stdlog.New(os.Stdout, "[DEBUG] ", format)
 	log.info = stdlog.New(os.Stdout, "[INFO] ", format)
@@ -116,7 +117,7 @@ func init() {
 // Setup setup log format and output file
 func Setup() {
 	format := stdlog.Ldate | stdlog.Ltime | stdlog.Lmicroseconds | stdlog.Lshortfile
-	fname := fmt.Sprintf("%s.%d.log", filepath.Base(os.Args[0]), os.Getpid())
+	fname := fmt.Sprintf("%s.%d.%s.log", filepath.Base(os.Args[0]), os.Getpid(), log.id)
 	f, err := os.Create(filepath.Join(log.dir, fname))
 	if err != nil {
 		stdlog.Fatal(err)

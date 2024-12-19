@@ -110,7 +110,7 @@ func (hs *HotStuff) ProcessBlock(block *blockchain.Block) error {
 	} else {
 		log.Debugf("[%v] vote is sent to %v, id: %x", hs.ID(), voteAggregator, vote.BlockID)
 		vote.Timestamp = time.Now()
-		hs.Send2(voteAggregator, vote)
+		hs.Send(voteAggregator, vote)
 	}
 	b, ok := hs.bufferedBlocks[block.View]
 	if ok {
@@ -166,7 +166,7 @@ func (hs *HotStuff) ProcessLocalTmo(view types.View) {
 		NodeID: hs.ID(),
 		HighQC: hs.GetHighQC(),
 	}
-	hs.Broadcast2(tmo)
+	hs.Broadcast(tmo)
 	hs.ProcessRemoteTmo(tmo)
 }
 

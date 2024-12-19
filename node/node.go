@@ -94,7 +94,7 @@ func (n *node) Run() {
 	if len(n.handles) > 0 {
 		go n.handle()
 		go n.recv()
-		go n.recv2()
+		//go n.recv2()
 		go n.txn()
 	}
 	n.http()
