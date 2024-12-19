@@ -21,7 +21,7 @@
     "5": "http://172.18.0.6:8070"
   },
   "policy": "majority",
-  "threshold": 3,
+  "threshold": 1,
   "byzNo": 0,
   "strategy": "missing",
   "thrifty": false,
@@ -41,7 +41,7 @@
   "broadcastBygroup":false,
   "onlyworker":false,
   "model":"exp2",
-  "txPerSecond":2000,
+  "txPerSecond":200,
   "mb_broadcast":200,
   "time":30,
   "poolsize":100000,

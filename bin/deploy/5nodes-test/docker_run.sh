@@ -15,12 +15,15 @@ START_IP=2
 # 容器数量
 CONTAINER_COUNT=5
 
+# 挂载的端口号
+HTTP_PORT=8070
+
 # 创建容器
 for i in $(seq 1 $CONTAINER_COUNT); do
     CONTAINER_NAME="mempool_$i"
     CONTAINER_IP="${BASE_IP}$((START_IP + i - 1))"
 
-    echo "正在启动容器: $CONTAINER_NAME, 分配IP: $CONTAINER_IP"
+    echo "正在启动容器: $CONTAINER_NAME, 分配IP: $CONTAINER_IP, 挂载端口：$((HTTP_PORT+i-1))"
 
     docker run -d --rm \
         --name $CONTAINER_NAME \
@@ -28,6 +31,8 @@ for i in $(seq 1 $CONTAINER_COUNT); do
         --ip $CONTAINER_IP \
         --privileged \
         -it \
+        -p $((HTTP_PORT+i-1)):8070 \
+        -v ./local_logs:/collab/logs \
         $IMAGE_NAME \
         /bin/bash -c "export TERM=xterm && service ssh start && top"
 

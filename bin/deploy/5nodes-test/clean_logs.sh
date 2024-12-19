@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # 用来清理日志文件
 
-LOG_DIR="."
+LOG_DIR="./logs/$1/"
+echo "准备删除 $LOG_DIR"
 LOG_FILES=$(find "$LOG_DIR" -type f -name "*.log")
 
 if [ -n "$LOG_FILES" ]; then
