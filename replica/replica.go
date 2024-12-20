@@ -307,7 +307,7 @@ func (r *Replica) HandleMissingMBRequest(mbr message.MissingMBRequest) {
 	}
 }
 
-//lxx写的，重传对方没收到的stable块
+// lxx写的，重传对方没收到的stable块
 func (r *Replica) HandleMissingStableMb(mbr message.MissingStableMBRequest) {
 	log.Debugf("[%v] missing microblocks request is received from %v, missing mbs are: %x", r.ID(), mbr.RequesterID, mbr.MbID)
 	// r.missingCounts[mbr.RequesterID] += len(mbr.MissingMBList)
@@ -420,17 +420,25 @@ func (r *Replica) handleQuery(m message.Query) {
 }
 
 /*
-	区块执行效率统计：
-		1. 执行全部区块所用的时间
-		2. 交易执行数量随时间的变化曲线 间隔1s
-		3. 交易TPS = 执行成功的交易 / 时间
-		4. 交易时延 = 交易的总时延 / 交易数
+区块执行效率统计：
 
-		每秒钟，发送当前成功执行的 节前时间戳点号 确认阈值 小块编号 小块执行完成时间 当
-		1. 全部小块执行成功后 / （t_最后一个小块的时间戳 - 小块被提交的提交时间）
-		2. 对时间戳进行四舍五入近似 或者 画平滑曲线
-		3. 对2的每个时间戳求TPS，取max
-		4. 对于每一个成功的小块：累加（t_小块的时间戳 - 小块被提交的提交时间）/ 小块数量
+ 1. 执行全部区块所用的时间
+
+ 2. 交易执行数量随时间的变化曲线 间隔1s
+
+ 3. 交易TPS = 执行成功的交易 / 时间
+
+ 4. 交易时延 = 交易的总时延 / 交易数
+
+    每秒钟，发送当前成功执行的 节前时间戳点号 确认阈值 小块编号 小块执行完成时间 当
+
+ 1. 全部小块执行成功后 / （t_最后一个小块的时间戳 - 小块被提交的提交时间）
+
+ 2. 对时间戳进行四舍五入近似 或者 画平滑曲线
+
+ 3. 对2的每个时间戳求TPS，取max
+
+ 4. 对于每一个成功的小块：累加（t_小块的时间戳 - 小块被提交的提交时间）/ 小块数量
 */
 func (r *Replica) sendExecutedResult() {
 
@@ -487,7 +495,7 @@ func (r *Replica) saveQuery() {
 	r.result = status
 }
 
-//只有通过客户端发送交易时，才会走这个接口的逻辑，否则observerPool
+// 只有通过客户端发送交易时，才会走这个接口的逻辑，否则observerPool
 func (r *Replica) handleTxn(m message.Transaction) {
 	r.startSignal()
 	log.Debugf("[%v] handleTxn ---  recivie tx TxID:[%v] ForwardNode:[%v] ", r.ID(), m.ID, m.NodeID)
@@ -527,7 +535,7 @@ func (r *Replica) handleTxn(m message.Transaction) {
 	r.kickOff()
 }
 
-//后台监控交易池情况，如果交易池数量大于msize，生成一个mb，并广播
+// 后台监控交易池情况，如果交易池数量大于msize，生成一个mb，并广播
 func (r *Replica) observePool() {
 	payloadsize := config.GetConfig().PayloadSize
 	msize := config.GetConfig().MSize
@@ -775,7 +783,7 @@ func (r *Replica) randomPick() []identity.NodeID {
 	return pickedNode
 }
 
-//按组广播
+// 按组广播
 func (r *Replica) pickGroup() []identity.NodeID {
 	//取出对应组的人进行广播
 	n := config.GetConfig().N() - 1 // exluding the master
@@ -1020,7 +1028,7 @@ func (r *Replica) ListenCommittedBlocks() {
 	}
 }
 
-//每隔1s保存一次结果
+// 每隔1s保存一次结果
 func (r *Replica) saveResult() {
 	ticker := time.NewTicker(1 * time.Second)
 	done := make(chan bool)

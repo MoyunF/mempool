@@ -9,14 +9,14 @@ IMAGE_NAME="liuxin2629/mempool:latest"
 NETWORK_NAME="exp"
 
 # 起始IP地址 (根据你的网络配置调整)
-BASE_IP="172.18.0."
+BASE_IP="172.19.0."
 START_IP=2
 
 # 容器数量
 CONTAINER_COUNT=5
 
 # 挂载的端口号
-HTTP_PORT=8070
+HTTP_PORT=28070
 
 # 创建容器
 for i in $(seq 1 $CONTAINER_COUNT); do
