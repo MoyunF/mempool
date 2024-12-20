@@ -120,10 +120,10 @@ func (am *AckMem) AddTxn(txn *message.Transaction) (bool, *blockchain.MicroBlock
 	}
 }
 
-//生成微块
+//仅用来创建微块，只包含最基本的交易信息等
 func (am *AckMem) GenerateMb(txs []*message.Transaction) (bool, *blockchain.MicroBlock) {
 	if am.RemainingMB() >= int64(am.memsize) {
-		log.Warningf("mempool's mb is full")
+		log.Warningf("Mempool is full, can't generate MB")
 		return false, nil
 	}
 	var id crypto.Identifier
@@ -151,6 +151,7 @@ func (am *AckMem) AddMicroblock(mb *blockchain.MicroBlock) error {
 		AckOutGroup: make([]identity.NodeID, 0),
 	}
 	pm.ackMap[mb.Sender] = struct{}{}
+	pm.ackNum++
 	if am.gm.IsInGroup(mb.GroupId, am.node.ID()) {
 		//如果微块是自己组内的
 		pm.ackNum++

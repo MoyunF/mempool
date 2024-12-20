@@ -121,7 +121,7 @@ func (hs *HotStuff) ProcessBlock(block *blockchain.Block) error {
 }
 
 func (hs *HotStuff) ProcessVote(vote *blockchain.Vote) {
-	log.Debugf("[%v] is processing the vote, block id: %x", hs.ID(), vote.BlockID)
+	log.Debugf("[%v] is processing the vote from [%v], block id: %x", hs.ID(), vote.Voter, vote.BlockID)
 	if vote.Voter != hs.ID() {
 		voteIsVerified, err := crypto.PubVerify(vote.Signature, crypto.IDToByte(vote.BlockID), vote.Voter)
 		if err != nil {

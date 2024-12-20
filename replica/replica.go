@@ -566,20 +566,18 @@ func (r *Replica) observePool() {
 			for i := 0; i < config.GetConfig().Mb_broadcast; i++ {
 				r.mbBroadcast <- struct{}{}
 			}
-			time.Sleep(1 * time.Second)
+			time.Sleep(3 * time.Second)
 		}
 	}()
 
 	for {
 		<-r.Pool.FetchSignal
 		if r.Pool.TxLen() > nums {
-			log.Warningf("before fetchTx, len:%v", r.Pool.TxLen())
 			txs := r.Pool.FetchTx(nums)
-			log.Warningf("after fetchTx, len:%v", r.Pool.TxLen())
 			isbuilt, mb := r.sm.GenerateMb(txs)
 			if isbuilt {
 				//构建微块并且广播
-				log.Debugf("[%v] built mb from pool, txs size %v", r.ID(), len(mb.Txns))
+				log.Debugf("Function:observePool---[%v] built mb from pool, mb has %v txs", r.ID(), len(mb.Txns))
 				//log.Debugf("%+v", mb)
 				r.txNoInMB = len(mb.Txns)
 				mb.Sender = r.ID()
