@@ -218,6 +218,8 @@ func (r *Replica) HandleProposal(proposal blockchain.Proposal) {
 }
 
 func (r *Replica) HandleStable(stable blockchain.Stable) {
+	log.Debugf("HandleStable() --- [%v] receive a stable from [%v], mb's hash[%v]", r.ID(),
+		stable.Sender, stable.MicroblockID)
 	r.sm.AddStable(&stable)
 }
 
@@ -260,34 +262,27 @@ func (r *Replica) HandleMicroblock(mb blockchain.MicroBlock) {
 	r.totalMicroblocks++
 	mb.FutureTimestamp = time.Now()
 
-	//这个是proposal丢失逻辑
-	log.Debugf("[%v] received a microblock, id: %x", r.ID(), mb.Hash)
+	log.Debugf("HandleMircoblock() --- [%v] received a microblock from [%v], mb's hash: %x", r.ID(), mb.Sender, mb.Hash)
 	// proposalID, exists := r.missingMBs[mb.Hash]
 	if mb.IsRequested {
 		//是丢失块,调用丢失处理逻辑 TODO:处理丢失请求的函数
-		log.Debugf("[%v] a missing mb for proposal is found", r.ID())
+		log.Debugf("HandleMircoblock() --- [%v] a missing mb is found, mb's hash:", r.ID(), mb.Hash)
 		r.sm.HandleMissingStableMb(&mb)
 		r.ex.MissReceive <- &mb
 	} else {
 		err := r.sm.AddMicroblock(&mb)
 		if err != nil {
-			log.Errorf("[%v] can not add a microblock, id: %x", r.ID(), mb.Hash)
+			log.Errorf("HandleMircoblock() ---[%v] can not add a microblock, mb's hash: %x", r.ID(), mb.Hash)
 		}
 		// ack
 		if !mb.IsRequested && config.Configuration.MemType == "ack" {
-			//if config.Configuration.MemType == "time" {
-			//	r.Send(mb.Sender, ack)
-			//} else {
-			//	r.Broadcast(ack)
-			//}
-			//leader := r.GetCurrentLeader()
 			ack := blockchain.MakeAck(r.ID(), mb.Hash)
 			if config.GetConfig().BroadcastByGroup == true && !r.gm.IsInMyGroup(mb.GroupId) {
+				log.Debugf("HandleMircoblock() --- [%v] recieved a outgroup mb, mb'hash [%v], ignore", r.ID(), mb.Hash)
 				ack.OutGroup = true
 			}
 			if mb.Sender != r.ID() {
-				//??写错了吧，为啥不是给微块的创建者发
-				log.Debugf("[%v] receive a mb, reply ack to [%v]", r.ID(), mb.Sender)
+				log.Debugf("HandleMircoblock() --- [%v] receive a mb, reply ack to [%v], mb's has [%v]", r.ID(), mb.Sender, mb.Hash)
 				r.Send(mb.Sender, blockchain.MakeAck(r.ID(), mb.Hash))
 			} else {
 				r.HandleAck(*ack)
@@ -356,7 +351,7 @@ func (r *Replica) HandleTmo(tmo pacemaker.TMO) {
 }
 
 func (r *Replica) HandleAck(ack blockchain.Ack) {
-	log.Debugf("[%v] received an ack message form %v, id: %x", r.ID(), ack.Receiver, ack.MicroblockID)
+	log.Debugf("HandleAck() --- [%v] received an ack message form [%v] for mb's hash[%v]", r.ID(), ack.Receiver, ack.MicroblockID)
 	r.processAcks(&ack)
 }
 
@@ -435,7 +430,7 @@ func (r *Replica) handleQuery(m message.Query) {
 		4. 对于每一个成功的小块：累加（t_小块的时间戳 - 小块被提交的提交时间）/ 小块数量
 */
 func (r *Replica) sendExecutedResult() {
-		
+
 }
 
 // 将结果保存到日志中
@@ -491,39 +486,17 @@ func (r *Replica) saveQuery() {
 
 func (r *Replica) handleTxn(m message.Transaction) {
 	r.startSignal()
-	log.Debugf("[%v] handleTxn: handle Tx", r.ID())
+	log.Debugf("[%v] handleTxn ---  recivie tx TxID:[%v] ForwardNode:[%v] ", r.ID(), m.ID, m.NodeID)
 	m.Timestamp = time.Now()
 	isbuilt, mb := r.sm.AddTxn(&m)
 	if isbuilt {
-		log.Debugf("[%v] handleTxn: built mb done, txs size %v", r.ID(), len(mb.Txns))
-		//if config.Configuration.MemType == "time" {
-		//	stableTime := r.estimator.PredictStableTime("mb")
-		//stableTime := time.Duration(0)
-
-		//log.Debugf\("[%v] stable time for a microblock is %v", r.ID(), stableTime)
-		//	mb.FutureTimestamp = time.Now().Add(stableTime)
-		//}
-
+		log.Debugf("[%v] handleTxn --- built mb done, txs size %v", r.ID(), len(mb.Txns))
 		r.txNoInMB = len(mb.Txns)
 		mb.Sender = r.ID()
 		r.sm.AddMicroblock(mb)
 		mb.Timestamp = time.Now()
 		r.totalMicroblocks++
 		r.totalProposedMBs++
-		//if config.Configuration.Gossip == false {
-		//	if r.isByz && config.Configuration.Strategy == "missing" {
-		//		if config.Configuration.MemType == "naive" {
-		//			r.Send(r.GetCurrentLeader(), mb)
-		//		} else if config.Configuration.MemType == "ack" {
-		//			r.MulticastQuorum(r.randomPick(), mb)
-		//		}
-		//	} else {
-		//		r.Broadcast(mb)
-		//	}
-		//} else {
-		//	mb.Hops++
-		//	r.selfMBChan <- *mb
-		//}
 		if config.Configuration.LoadBalance == false {
 			if r.isByz && config.Configuration.Strategy == "missing" {
 				if config.Configuration.MemType == "naive" {
@@ -534,15 +507,9 @@ func (r *Replica) handleTxn(m message.Transaction) {
 				}
 			} else {
 				if config.Configuration.BroadcastByGroup == true {
-					log.Debugf("处理微块")
-					mb1 := *mb
-					for _, tx := range mb.Txns {
-						tx.Command.Value = make([]byte, 1)
-					}
-					//模拟随机生成
 					groupId := mb.GroupId
 					groupList := r.gm.GetGroupListByGroupId(groupId)
-					r.BroadcastByGroup(mb, &mb1, groupList) //3f+1 -> 2f+1 block f hash
+					r.BroadcastByGroup(mb, groupList) //N -> 2f+1
 				} else {
 					r.Broadcast(mb)
 				}
@@ -578,7 +545,6 @@ func (r *Replica) observePool() {
 			if isbuilt {
 				//构建微块并且广播
 				log.Debugf("Function:observePool---[%v] built mb from pool, mb has %v txs", r.ID(), len(mb.Txns))
-				//log.Debugf("%+v", mb)
 				r.txNoInMB = len(mb.Txns)
 				mb.Sender = r.ID()
 				r.sm.AddMicroblock(mb)
@@ -600,20 +566,16 @@ func (r *Replica) observePool() {
 						}
 					} else {
 						if config.Configuration.BroadcastByGroup == true {
-							log.Debugf("处理微块")
-							mb1 := *mb
-							//log.Debugf("mb1's tx:len%v", len(mb1.Txns[0].Command.Value))
-							//log.Debugf("mb's tx:len%v", len(mb.Txns[0].Command.Value))
-							//模拟随机生成
+							log.Debugf("Function:observePool---[%v] broadcastByGroup mb's hash:[%v]", r.ID(), mb.Hash)
 							groupId := mb.GroupId
 							groupList := r.gm.GetGroupListByGroupId(groupId)
-							r.BroadcastByGroup(mb, &mb1, groupList) //3f+1 -> 2f+1 block f hash
+							r.BroadcastByGroup(mb, groupList) //3f+1 -> 2f+1 block f hash
 						} else {
+							log.Debugf("Function:observePool---[%v] broadcastToAll mb's hash:[%v]", r.ID(), mb.Hash)
 							r.Broadcast(mb)
 						}
 					}
 				} else {
-					//loadbalance == true
 					mb.Hops++
 					r.selfMBChan <- *mb
 				}
@@ -896,11 +858,11 @@ func (r *Replica) processAcks(ack *blockchain.Ack) {
 		if ack.Receiver != r.ID() {
 			voteIsVerified, err := crypto.PubVerify(ack.Signature, crypto.IDToByte(ack.MicroblockID), ack.Receiver)
 			if err != nil {
-				log.Warningf("[%v] Error in verifying the signature in ack id: %x", r.ID(), ack.MicroblockID)
+				log.Warningf("processAcks() --- [%v] Error in verifying the signature in ack id: %x", r.ID(), ack.MicroblockID)
 				return
 			}
 			if !voteIsVerified {
-				log.Warningf("[%v] received an ack with invalid signature. vote id: %x", r.ID(), ack.MicroblockID)
+				log.Warningf("processAcks() --- [%v] received an ack with invalid signature. vote id: %x", r.ID(), ack.MicroblockID)
 				return
 			}
 		}
@@ -1014,7 +976,7 @@ func (r *Replica) ListenLocalEvent() {
 				r.roundNo++
 				r.lastViewTime = now
 				r.eventChan <- view
-				log.Debugf("[%v] the last view lasts %v milliseconds, current view: %v", r.ID(), lasts.Milliseconds(), view)
+				log.Debugf("ListenLocalEvent --- [%v] the last view lasts %v milliseconds, current view: %v", r.ID(), lasts.Milliseconds(), view)
 				break L
 			case <-r.timer.C:
 				r.Safety.ProcessLocalTmo(r.pm.GetCurView())
@@ -1047,7 +1009,6 @@ func (r *Replica) saveResult() {
 			case <-done:
 				return
 			case <-ticker.C:
-				// 在这里调用您的函数
 				r.saveQuery()
 			}
 		}
@@ -1087,7 +1048,7 @@ func (r *Replica) Start() {
 	//go r.gossip()
 	go r.loadbalance() //负载均衡用
 
-	//交易执行其
+	//交易执行器
 	go r.ex.HandleMB()
 	//模拟交易
 	go r.benchmark()
@@ -1095,6 +1056,7 @@ func (r *Replica) Start() {
 
 	// wait for the start signal
 	<-r.start
+	log.Infof("Start() --- [%v] start", r.Node.ID())
 	go r.ListenLocalEvent()
 	go r.ListenCommittedBlocks()
 

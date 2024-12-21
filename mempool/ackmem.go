@@ -138,8 +138,17 @@ func (am *AckMem) AddMicroblock(mb *blockchain.MicroBlock) error {
 	//if am.microblocks.Len() >= am.memsize {
 	//	return errors.New("the memory queue is full")
 	//}
-	_, exists := am.microblockMap[mb.Hash]
-	if exists {
+	mb_old, exists := am.microblockMap[mb.Hash]
+	if exists && mb_old.IsFake == false {
+		//之前收到过这个区块
+		return nil
+	}
+	if exists && mb_old.IsFake == true {
+		//之前提起受到过区块的stable信息，构建了一个假区块给共识模块使用，现在收到了真正的区块，替换掉郊区快
+		log.Debugf("AddMircroblock() --- [%v] receive a mb after got its stable, mb's hash[%v], mb received 's fake info [%v]", am.node.ID(),
+			mb.Hash, mb.IsFake)
+		am.microblockMap[mb.Hash] = mb
+		//TODO:存疑是否需要交给执行层
 		return nil
 	}
 	//pm容器，用来判断谁给这个微块发送了ack
@@ -154,7 +163,6 @@ func (am *AckMem) AddMicroblock(mb *blockchain.MicroBlock) error {
 	pm.ackNum++
 	if am.gm.IsInGroup(mb.GroupId, am.node.ID()) {
 		//如果微块是自己组内的
-		pm.ackNum++
 		pm.AckInGroup = append(pm.AckInGroup, mb.Sender)
 	} else {
 		pm.AckOutGroup = append(pm.AckOutGroup, mb.Sender)
@@ -179,7 +187,7 @@ func (am *AckMem) AddMicroblock(mb *blockchain.MicroBlock) error {
 				am.TotalStableMbs++
 				am.TotalStableDelay += time.Now().Sub(mb.Timestamp)
 				delete(am.pendingMicroblocks, mb.Hash)
-				log.Debugf("microblock id: %x becomes stable from buffer", mb.Hash)
+				log.Debugf("AddMircoblock () --- [%v] mb's hash: %v becomes stable from buffer", am.node.ID(), mb.Hash)
 			}
 		} else {
 			am.pendingMicroblocks[mb.Hash] = pm
@@ -194,28 +202,26 @@ func (am *AckMem) AddMicroblock(mb *blockchain.MicroBlock) error {
 func (am *AckMem) AddAck(ack *blockchain.Ack) {
 	am.mu.Lock()
 	defer am.mu.Unlock()
-	log.Debugf("receive ack for mb id:%v", ack.MicroblockID)
 	target, received := am.pendingMicroblocks[ack.MicroblockID]
 	//check if the ack arrives before the microblock
 	if received {
 		if config.GetConfig().BroadcastByGroup == true {
 			//分组
 			if !ack.OutGroup {
-				log.Debugf("收到组内节点%v的ack", ack.Receiver)
 				target.ackMap[ack.Receiver] = struct{}{}
 				target.ackNum++
 				target.AckInGroup = append(target.AckInGroup, ack.Receiver)
-				log.Debugf("ack nums is %v", target.ackNum)
+				log.Debugf("AddAck() --- [%v]receive ack from own group, for mb's hash[%v], ack num become [%v]", am.node.ID(), ack.MicroblockID, target.ackNum)
 			} else {
-				log.Debugf("收到组外节点%v的ack", ack.Receiver)
 				target.ackMap[ack.Receiver] = struct{}{}
 				target.AckOutGroup = append(target.AckOutGroup, ack.Receiver)
+				log.Debugf("AddAck() --- [%v]receive ack from out group, for mb's hash[%v], ack num don't change [%v]", am.node.ID(), ack.MicroblockID, target.ackNum)
 			}
 		} else {
 			//不分组
 			target.ackMap[ack.Receiver] = struct{}{}
 			target.ackNum++
-			log.Debugf("ack nums is %v", target.ackNum)
+			log.Debugf("AddAck() --- [%v]receive ack, for mb's hash[%v], ack num become [%v]", am.node.ID(), ack.MicroblockID, target.ackNum)
 			target.AckInGroup = append(target.AckInGroup, ack.Receiver)
 		}
 		if target.ackNum >= am.threshhold {
@@ -224,7 +230,6 @@ func (am *AckMem) AddAck(ack *blockchain.Ack) {
 				am.stableMBs[target.microblock.Hash] = struct{}{}
 				am.TotalStableMbs++
 				am.TotalStableDelay += time.Now().Sub(target.microblock.Timestamp)
-				//log.Debugf("push a stableMb id:%v", target.microblock)
 				delete(am.pendingMicroblocks, ack.MicroblockID)
 				//构建stable信息
 				stable := blockchain.Stable{
@@ -238,7 +243,7 @@ func (am *AckMem) AddAck(ack *blockchain.Ack) {
 				am.StableBuffer[target.microblock.Hash] = stable //保存stable信息
 				copy(stable.AckInGroup, target.AckInGroup)
 				copy(stable.AckOutGroup, target.AckOutGroup)
-				log.Debugf("stable准备广播: %+v", stable)
+				log.Debugf("AddAck() --- [%v]get a stable mb, for mb's hash[%v], ack num become [%v], broadcast to all nodes", am.node.ID(), ack.MicroblockID, target.ackNum)
 				am.node.Broadcast(stable)
 			}
 		}
@@ -246,8 +251,8 @@ func (am *AckMem) AddAck(ack *blockchain.Ack) {
 		//ack arrives before microblock, record the number of ack received before microblock
 		//let the addMicrobslock do the rest.
 		if ack.OutGroup != true {
-			//组内的回复才奏效
-			log.Debugf("receive ack for mb : %v before mb", ack.MicroblockID)
+			//组内的回复才奏效，缺省值为false，所以不分组的时候也不影响逻辑
+			log.Debugf("AddAck() --- [%v]receive ack before mb's hash[%v],  buffer ack", am.node.ID(), ack.MicroblockID)
 			_, exist := am.ackBuffer[ack.MicroblockID]
 			if exist {
 				am.ackBuffer[ack.MicroblockID][ack.Receiver] = ack.Signature
@@ -256,6 +261,8 @@ func (am *AckMem) AddAck(ack *blockchain.Ack) {
 				temp[ack.Receiver] = ack.Signature
 				am.ackBuffer[ack.MicroblockID] = temp
 			}
+		} else {
+			log.Debugf("AddAck() --- [%v]receive ack before mb's hash[%v], but outgroup, not buffer", am.node.ID(), ack.MicroblockID)
 		}
 	}
 }
@@ -263,10 +270,8 @@ func (am *AckMem) AddAck(ack *blockchain.Ack) {
 func (am *AckMem) AddStable(stable *blockchain.Stable) {
 	am.mu.Lock()
 	defer am.mu.Unlock()
-	log.Debugf("receive stable for mb's hash:%v from:%v", stable.MicroblockID, stable.Sender)
 	if _, ok := am.stableMBs[stable.MicroblockID]; ok {
 		//如果自己已经确认过了
-		log.Debugf("has been stabel by itself")
 		return
 	}
 	//保存stable信息
@@ -279,18 +284,12 @@ func (am *AckMem) AddStable(stable *blockchain.Stable) {
 		am.stableMBs[target.microblock.Hash] = struct{}{}
 		am.TotalStableMbs++
 		am.TotalStableDelay += time.Now().Sub(target.microblock.Timestamp)
-
-		log.Debugf("receive stale from %v", stable.Sender)
 		delete(am.pendingMicroblocks, stable.MicroblockID)
 	}
 	_, exist := am.microblockMap[stable.MicroblockID]
 	if !exist {
 		//收到了stable但是没有收到微块
-		if am.gm.IsInGroup(stable.GroupId, am.node.ID()) {
-			log.Debugf("收到了一个自己组的stable，但是没有对应的微块")
-		} else {
-			log.Debugf("收到了其他组的stable，所以构建一个fake块")
-		}
+		log.Debugf("AddStable() --- [%v]receive stable, but don't have mb, mb's hash[%v]", am.node.ID(), stable.MicroblockID)
 		mb := &blockchain.MicroBlock{
 			IsFake:    true,
 			Hash:      stable.MicroblockID,
@@ -311,7 +310,6 @@ func (am *AckMem) AddStable(stable *blockchain.Stable) {
 func (am *AckMem) HandleMissingStableMb(mb *blockchain.MicroBlock) {
 	am.mu.Lock()
 	defer am.mu.Unlock()
-	log.Debugf("内存池收到丢失的stable块")
 	am.microblockMap[mb.Hash] = mb
 }
 

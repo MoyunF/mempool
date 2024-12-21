@@ -28,10 +28,10 @@ type Stable struct {
 }
 
 type Ack struct {
-	Receiver     identity.NodeID //ack的发送者
+	Receiver     identity.NodeID //变量名写错了，实际为ack的发送者
 	MicroblockID crypto.Identifier
 	crypto.Signature
-	OutGroup bool //是否为组外节点回复
+	OutGroup bool //是否为组外节点回复，默认为false
 }
 
 type QC struct {
