@@ -6,7 +6,6 @@ import (
 
 	"github.com/gitferry/bamboo/crypto/merkle"
 	"github.com/gitferry/bamboo/group"
-	"github.com/gitferry/bamboo/log"
 	"github.com/kelindar/bitmap"
 
 	"github.com/gitferry/bamboo/crypto"
@@ -189,7 +188,6 @@ func BuildBlock(proposal *Proposal, payload *Payload) *Block {
 // }
 
 func NewMicroblock(proposalID crypto.Identifier, txnList []*message.Transaction) *MicroBlock {
-	log.Debugf("make a new mb, txs len: %v", len(txnList))
 	mb := new(MicroBlock)
 	mb.ProposalID = proposalID
 	mb.Txns = txnList

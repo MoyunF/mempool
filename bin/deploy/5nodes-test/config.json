@@ -93,6 +93,6 @@
       "8.130.35.70:9092"
     ],
     "Topic":"mempool",
-    "Enable":true
+    "Enable":false
   }
 }

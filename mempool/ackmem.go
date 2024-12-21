@@ -145,7 +145,7 @@ func (am *AckMem) AddMicroblock(mb *blockchain.MicroBlock) error {
 	}
 	if exists && mb_old.IsFake == true {
 		//之前提起受到过区块的stable信息，构建了一个假区块给共识模块使用，现在收到了真正的区块，替换掉郊区快
-		log.Debugf("AddMircroblock() --- [%v] receive a mb after got its stable, mb's hash[%v], mb received 's fake info [%v]", am.node.ID(),
+		log.Debugf("AddMircroblock() --- [%v] receive a mb after got its stable, mb's hash[%x], mb received 's fake info [%v]", am.node.ID(),
 			mb.Hash, mb.IsFake)
 		am.microblockMap[mb.Hash] = mb
 		//TODO:存疑是否需要交给执行层
@@ -168,7 +168,7 @@ func (am *AckMem) AddMicroblock(mb *blockchain.MicroBlock) error {
 		pm.AckOutGroup = append(pm.AckOutGroup, mb.Sender)
 	}
 	am.microblockMap[mb.Hash] = mb
-	log.Debugf("收到了mb：%v ,mb's fake : %v", mb.Hash, mb.IsFake)
+	log.Debugf("收到了mb：%x ,mb's fake : %v", mb.Hash, mb.IsFake)
 
 	//check if there are some acks of this microblock arrived before
 	buffer, received := am.ackBuffer[mb.Hash]
@@ -187,7 +187,7 @@ func (am *AckMem) AddMicroblock(mb *blockchain.MicroBlock) error {
 				am.TotalStableMbs++
 				am.TotalStableDelay += time.Now().Sub(mb.Timestamp)
 				delete(am.pendingMicroblocks, mb.Hash)
-				log.Debugf("AddMircoblock () --- [%v] mb's hash: %v becomes stable from buffer", am.node.ID(), mb.Hash)
+				log.Debugf("AddMircoblock () --- [%v] mb's hash: %x becomes stable from buffer", am.node.ID(), mb.Hash)
 			}
 		} else {
 			am.pendingMicroblocks[mb.Hash] = pm
@@ -211,17 +211,17 @@ func (am *AckMem) AddAck(ack *blockchain.Ack) {
 				target.ackMap[ack.Receiver] = struct{}{}
 				target.ackNum++
 				target.AckInGroup = append(target.AckInGroup, ack.Receiver)
-				log.Debugf("AddAck() --- [%v]receive ack from own group, for mb's hash[%v], ack num become [%v]", am.node.ID(), ack.MicroblockID, target.ackNum)
+				log.Debugf("AddAck() --- [%v]receive ack from own group, for mb's hash[%x], ack num become [%v]", am.node.ID(), ack.MicroblockID, target.ackNum)
 			} else {
 				target.ackMap[ack.Receiver] = struct{}{}
 				target.AckOutGroup = append(target.AckOutGroup, ack.Receiver)
-				log.Debugf("AddAck() --- [%v]receive ack from out group, for mb's hash[%v], ack num don't change [%v]", am.node.ID(), ack.MicroblockID, target.ackNum)
+				log.Debugf("AddAck() --- [%v]receive ack from out group, for mb's hash[%x], ack num don't change [%v]", am.node.ID(), ack.MicroblockID, target.ackNum)
 			}
 		} else {
 			//不分组
 			target.ackMap[ack.Receiver] = struct{}{}
 			target.ackNum++
-			log.Debugf("AddAck() --- [%v]receive ack, for mb's hash[%v], ack num become [%v]", am.node.ID(), ack.MicroblockID, target.ackNum)
+			log.Debugf("AddAck() --- [%v]receive ack, for mb's hash[%xv], ack num become [%v]", am.node.ID(), ack.MicroblockID, target.ackNum)
 			target.AckInGroup = append(target.AckInGroup, ack.Receiver)
 		}
 		if target.ackNum >= am.threshhold {
@@ -243,7 +243,7 @@ func (am *AckMem) AddAck(ack *blockchain.Ack) {
 				am.StableBuffer[target.microblock.Hash] = stable //保存stable信息
 				copy(stable.AckInGroup, target.AckInGroup)
 				copy(stable.AckOutGroup, target.AckOutGroup)
-				log.Debugf("AddAck() --- [%v]get a stable mb, for mb's hash[%v], ack num become [%v], broadcast to all nodes", am.node.ID(), ack.MicroblockID, target.ackNum)
+				log.Debugf("AddAck() --- [%v]get a stable mb, for mb's hash[%x], ack num become [%v], broadcast to all nodes", am.node.ID(), ack.MicroblockID, target.ackNum)
 				am.node.Broadcast(stable)
 			}
 		}
@@ -252,7 +252,7 @@ func (am *AckMem) AddAck(ack *blockchain.Ack) {
 		//let the addMicrobslock do the rest.
 		if ack.OutGroup != true {
 			//组内的回复才奏效，缺省值为false，所以不分组的时候也不影响逻辑
-			log.Debugf("AddAck() --- [%v]receive ack before mb's hash[%v],  buffer ack", am.node.ID(), ack.MicroblockID)
+			log.Debugf("AddAck() --- [%v]receive ack before mb's hash[%x],  buffer ack", am.node.ID(), ack.MicroblockID)
 			_, exist := am.ackBuffer[ack.MicroblockID]
 			if exist {
 				am.ackBuffer[ack.MicroblockID][ack.Receiver] = ack.Signature
@@ -262,7 +262,7 @@ func (am *AckMem) AddAck(ack *blockchain.Ack) {
 				am.ackBuffer[ack.MicroblockID] = temp
 			}
 		} else {
-			log.Debugf("AddAck() --- [%v]receive ack before mb's hash[%v], but outgroup, not buffer", am.node.ID(), ack.MicroblockID)
+			log.Debugf("AddAck() --- [%v]receive ack before mb's hash[%x], but outgroup, not buffer", am.node.ID(), ack.MicroblockID)
 		}
 	}
 }
@@ -289,7 +289,7 @@ func (am *AckMem) AddStable(stable *blockchain.Stable) {
 	_, exist := am.microblockMap[stable.MicroblockID]
 	if !exist {
 		//收到了stable但是没有收到微块
-		log.Debugf("AddStable() --- [%v]receive stable, but don't have mb, mb's hash[%v]", am.node.ID(), stable.MicroblockID)
+		log.Debugf("AddStable() --- [%v]receive stable, but don't have mb, mb's hash[%x]", am.node.ID(), stable.MicroblockID)
 		mb := &blockchain.MicroBlock{
 			IsFake:    true,
 			Hash:      stable.MicroblockID,
@@ -343,7 +343,7 @@ func (am *AckMem) GeneratePayload() *blockchain.Payload {
 	}
 
 	sigMap := make(map[crypto.Identifier]map[identity.NodeID]crypto.Signature, 0)
-	log.Debugf("generatePayload,stable mb is %v", am.stableMicroblocks.Len())
+	log.Debugf("GeneratePayload() --- [%v] has %v stable mb in mempool", am.node.ID(), am.stableMicroblocks.Len())
 	if am.stableMicroblocks.Len() >= am.bsize {
 		batchSize = am.bsize
 	} else {
@@ -366,7 +366,7 @@ func (am *AckMem) GeneratePayload() *blockchain.Payload {
 		if mb == nil {
 			break
 		}
-		log.Debugf("microblock id: %x is deleted from mempool when proposing", mb.Hash)
+		//log.Debugf("GeneratePayload() --- [%v]  mb [%x] is deleted from mempool when proposing", am.node.ID(), mb.Hash)
 		microblockList = append(microblockList, mb)
 		ackNodeList = append(ackNodeList, am.GenerateAckNodeList(mb))
 
@@ -381,7 +381,7 @@ func (am *AckMem) GeneratePayload() *blockchain.Payload {
 		}
 		sigMap[mb.Hash] = sigs
 	}
-	log.Debugf("generate payload, len: %v", len(microblockList))
+	//log.Debugf("GeneratePayload() --- [%v]  fetch %v mb as payload", am.node.ID(), batchSize)
 	return blockchain.NewPayload(microblockList, sigMap, ackNodeList)
 }
 
@@ -478,34 +478,35 @@ func (am *AckMem) FetchMB(p *blockchain.Proposal) *blockchain.PendingBlock {
 	existingBlocks := make([]*blockchain.MicroBlock, 0)
 	missingBlocks := make(map[crypto.Identifier]struct{}, 0)
 	for index, id := range p.HashList {
-		//把相关额pending和stable都删掉
+		//把相关的pending和stable都删掉
 		_, exists := am.pendingMicroblocks[id]
 		if exists {
 			delete(am.pendingMicroblocks, id)
-			log.Debugf("microblock id: %x is deleted from pending when filling", id)
+			log.Debugf("FetchMB() --- [%v]microblock id: %x is deleted from pending when filling", am.node.ID(), id)
 		}
 		for e := am.stableMicroblocks.Front(); e != nil; e = e.Next() {
 			// do something with e.Value
 			mb := e.Value.(*blockchain.MicroBlock)
 			if mb.Hash == id {
 				am.stableMicroblocks.Remove(e)
-				log.Debugf("microblock id: %x is deleted from stable when filling", mb.Hash)
+				log.Debugf("FetchMB() --- [%v]microblock id: %x is deleted from stable when filling", am.node.ID(), mb.Hash)
 				break
 			}
 		}
 
 		mb, ok := am.microblockMap[id]
 		if ok {
-			log.Debugf("FetchMb，在本地找到%v，mb's fake:%v", id, mb.IsFake)
+			log.Debugf("FetchMB() --- [%v]Porposal中的mb [%x]，在本地找到", am.node.ID(), id)
 			existingBlocks = append(existingBlocks, mb)
 		} else {
-			log.Debugf("Porposal中的mb id: %x 我没有", id)
+			log.Debugf("FetchMB() --- [%v]Porposal中的mb [%x]，在本地无法找到", am.node.ID(), id)
 			mb := &blockchain.MicroBlock{
 				IsFake:    true,
 				Hash:      id,
 				GroupId:   p.GroupList[index],
 				Timestamp: p.MbTime[index],
 			}
+			//存疑，是否应该加入到missing中
 			existingBlocks = append(existingBlocks, mb)
 		}
 	}

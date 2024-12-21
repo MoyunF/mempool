@@ -53,24 +53,24 @@ func NewHotStuff(
 }
 
 func (hs *HotStuff) ProcessBlock(block *blockchain.Block) error {
-	log.Debugf("[%v] is processing block from %v, view: %v, id: %x", hs.ID(), block.Proposer.Node(), block.View, block.ID)
+	log.Debugf("ProcessBlock() --- [%v] is processing block from %v, view: %v, id: %x", hs.ID(), block.Proposer.Node(), block.View, block.ID)
 	curView := hs.pm.GetCurView()
 	if block.Proposer != hs.ID() {
 		blockIsVerified, _ := crypto.PubVerify(block.Sig, crypto.IDToByte(block.ID), block.Proposer)
 		if !blockIsVerified {
-			log.Warningf("[%v] received a block with an invalid signature", hs.ID())
+			log.Warningf("ProcessBlock() --- [%v] received a block with an invalid signature", hs.ID())
 		}
 	}
 	if block.View > curView+1 {
 		//	buffer the block
 		hs.bufferedBlocks[block.View-1] = block
-		log.Debugf("[%v] the block is buffered, id: %x", hs.ID(), block.ID)
+		log.Debugf("ProcessBlock() --- [%v] the block is buffered, id: %x", hs.ID(), block.ID)
 		return nil
 	}
 	if block.QC != nil {
 		hs.updateHighQC(block.QC)
 	} else {
-		return fmt.Errorf("the block should contain a QC")
+		return fmt.Errorf("ProcessBlock() --- the block should contain a QC")
 	}
 	// does not have to process the QC if the replica is the proposer
 	if block.Proposer != hs.ID() {
@@ -78,11 +78,11 @@ func (hs *HotStuff) ProcessBlock(block *blockchain.Block) error {
 	}
 	curView = hs.pm.GetCurView()
 	if block.View < curView {
-		log.Warningf("[%v] received a stale proposal from %v, id: %x", hs.ID(), block.Proposer, block.ID)
+		log.Warningf("ProcessBlock() --- [%v] received a stale proposal from %v, id: %x", hs.ID(), block.Proposer, block.ID)
 		return nil
 	}
 	if !hs.Election.IsLeader(block.Proposer, block.View) {
-		return fmt.Errorf("received a proposal (%v) from an invalid leader (%v)", block.View, block.Proposer)
+		return fmt.Errorf("ProcessBlock() --- [%v] received a proposal (%v) from an invalid leader (%v)", hs.ID(), block.View, block.Proposer)
 	}
 	hs.bc.AddBlock(block)
 	// process buffered QC
@@ -94,21 +94,21 @@ func (hs *HotStuff) ProcessBlock(block *blockchain.Block) error {
 
 	shouldVote, err := hs.votingRule(block)
 	if err != nil {
-		log.Errorf("[%v] cannot decide whether to vote the block, %w", hs.ID(), err)
+		log.Errorf("ProcessBlock() --- [%v] cannot decide whether to vote the block, %w", hs.ID(), err)
 		return err
 	}
 	if !shouldVote {
-		log.Debugf("[%v] is not going to vote for block, id: %x", hs.ID(), block.ID)
+		log.Debugf("ProcessBlock() --- [%v] is not going to vote for block, id: %x", hs.ID(), block.ID)
 		return nil
 	}
 	vote := blockchain.MakeVote(block.View, hs.ID(), block.ID)
 	// vote is sent to the next leader
 	voteAggregator := hs.FindLeaderFor(block.View + 1)
 	if voteAggregator == hs.ID() {
-		log.Debugf("[%v] vote is sent to itself, id: %x", hs.ID(), vote.BlockID)
+		log.Debugf("ProcessBlock() --- [%v] vote is sent to itself, id: %x", hs.ID(), vote.BlockID)
 		hs.ProcessVote(vote)
 	} else {
-		log.Debugf("[%v] vote is sent to %v, id: %x", hs.ID(), voteAggregator, vote.BlockID)
+		log.Debugf("ProcessBlock() --- [%v] vote is sent to %v, id: %x", hs.ID(), voteAggregator, vote.BlockID)
 		vote.Timestamp = time.Now()
 		hs.Send(voteAggregator, vote)
 	}
@@ -121,15 +121,15 @@ func (hs *HotStuff) ProcessBlock(block *blockchain.Block) error {
 }
 
 func (hs *HotStuff) ProcessVote(vote *blockchain.Vote) {
-	log.Debugf("[%v] is processing the vote from [%v], block id: %x", hs.ID(), vote.Voter, vote.BlockID)
+	log.Debugf("ProcessVote() --- [%v] is processing the vote from [%v], block id: %x", hs.ID(), vote.Voter, vote.BlockID)
 	if vote.Voter != hs.ID() {
 		voteIsVerified, err := crypto.PubVerify(vote.Signature, crypto.IDToByte(vote.BlockID), vote.Voter)
 		if err != nil {
-			log.Warningf("[%v] Error in verifying the signature in vote id: %x", hs.ID(), vote.BlockID)
+			log.Warningf("ProcessVote() --- [%v] Error in verifying the signature in vote id: %x", hs.ID(), vote.BlockID)
 			return
 		}
 		if !voteIsVerified {
-			log.Warningf("[%v] received a vote with invalid signature. vote id: %x", hs.ID(), vote.BlockID)
+			log.Warningf("ProcessVote() --- [%v] received a vote with invalid signature. vote id: %x", hs.ID(), vote.BlockID)
 			return
 		}
 	}
@@ -149,13 +149,13 @@ func (hs *HotStuff) ProcessVote(vote *blockchain.Vote) {
 }
 
 func (hs *HotStuff) ProcessRemoteTmo(tmo *pacemaker.TMO) {
-	log.Debugf("[%v] is processing tmo from %v", hs.ID(), tmo.NodeID)
+	log.Debugf("ProcessRemoteTmo() --- [%v] is processing tmo from %v", hs.ID(), tmo.NodeID)
 	hs.processCertificate(tmo.HighQC)
 	isBuilt, tc := hs.pm.ProcessRemoteTmo(tmo)
 	if !isBuilt {
 		return
 	}
-	log.Debugf("[%v] a tc is built for view %v", hs.ID(), tc.View)
+	log.Debugf("ProcessRemoteTmo() --- [%v] a tc is built for view %v", hs.ID(), tc.View)
 	hs.processTC(tc)
 }
 
@@ -170,7 +170,9 @@ func (hs *HotStuff) ProcessLocalTmo(view types.View) {
 	hs.ProcessRemoteTmo(tmo)
 }
 
-func (hs *HotStuff) MakeProposal(view types.View, payload []crypto.Identifier,
+func (hs *HotStuff) MakeProposal(
+	view types.View,
+	payload []crypto.Identifier,
 	groupList []int,
 	ackNodeList []map[identity.NodeID]struct{},
 	mbTime []time.Time,
@@ -189,7 +191,7 @@ func (hs *HotStuff) forkChoice() *blockchain.QC {
 	parBlockID := hs.GetHighQC().BlockID
 	parBlock, err := hs.bc.GetBlockByID(parBlockID)
 	if err != nil {
-		log.Warningf("cannot get parent block of block id: %x: %w", parBlockID, err)
+		log.Warningf("forkChoice() --- cannot get parent block of block id: %x: %w", parBlockID, err)
 	}
 	if parBlock.QC.View < hs.preferredView {
 		choice = hs.GetHighQC()
@@ -217,7 +219,7 @@ func (hs *HotStuff) GetHighQC() *blockchain.QC {
 func (hs *HotStuff) GetChainStatus() string {
 	chainGrowthRate := hs.bc.GetChainGrowth()
 	blockIntervals := hs.bc.GetBlockIntervals()
-	return fmt.Sprintf("[%v] The current view is: %v, chain growth rate is: %v, ave block interval is: %v", hs.ID(), hs.pm.GetCurView(), chainGrowthRate, blockIntervals)
+	return fmt.Sprintf("GetChainStatus() --- [%v] The current view is: %v, chain growth rate is: %v, ave block interval is: %v", hs.ID(), hs.pm.GetCurView(), chainGrowthRate, blockIntervals)
 }
 
 func (hs *HotStuff) updateHighQC(qc *blockchain.QC) {
@@ -229,14 +231,14 @@ func (hs *HotStuff) updateHighQC(qc *blockchain.QC) {
 }
 
 func (hs *HotStuff) processCertificate(qc *blockchain.QC) {
-	log.Debugf("[%v] is processing a QC, block id: %x", hs.ID(), qc.BlockID)
+	log.Debugf("processCertificate() --- [%v] is processing a QC, block id: %x", hs.ID(), qc.BlockID)
 	if qc.View < hs.pm.GetCurView() {
 		return
 	}
 	if qc.Leader != hs.ID() {
 		quorumIsVerified, _ := crypto.VerifyQuorumSignature(qc.AggSig, qc.BlockID, qc.Signers)
 		if quorumIsVerified == false {
-			log.Warningf("[%v] received a quorum with invalid signatures", hs.ID())
+			log.Warningf("processCertificate() --- [%v] received a quorum with invalid signatures", hs.ID())
 			return
 		}
 	}
@@ -247,7 +249,7 @@ func (hs *HotStuff) processCertificate(qc *blockchain.QC) {
 	err := hs.updatePreferredView(qc)
 	if err != nil {
 		hs.bufferedQCs[qc.BlockID] = qc
-		log.Debugf("[%v] a qc is buffered, view: %v, id: %x", hs.ID(), qc.View, qc.BlockID)
+		log.Debugf("processCertificate() --- [%v] a qc is buffered, view: %v, id: %x", hs.ID(), qc.View, qc.BlockID)
 		return
 	}
 	hs.pm.AdvanceView(qc.View)
@@ -262,7 +264,7 @@ func (hs *HotStuff) processCertificate(qc *blockchain.QC) {
 	// forked blocks are found when pruning
 	committedBlocks, forkedBlocks, err := hs.bc.CommitBlock(block.ID, hs.pm.GetCurView())
 	if err != nil {
-		log.Errorf("[%v] cannot commit blocks, %w", hs.ID(), err)
+		log.Errorf("processCertificate() --- [%v] cannot commit blocks, %w", hs.ID(), err)
 		return
 	}
 	for _, cBlock := range committedBlocks {
