@@ -15,17 +15,14 @@ if [ -z "$CONTAINERS" ]; then
   exit 1
 fi
 
-# 初始化 id 计数器
-ID=1
-
 #
 EXP_ID=$1
 
 # 遍历容器并执行命令
 for CONTAINER in $CONTAINERS; do
   echo "在容器 $CONTAINER 中执行命令，id=$ID"
-
-  docker exec "$CONTAINER" sh -c "cd /collab && nohup ./run.sh $ID $EXP_ID > /dev/null 2>&1 &"
+  
+  docker exec "$CONTAINER" sh -c "cd /collab && nohup ./run.sh $EXP_ID > /dev/null 2>&1 &"
 
   # 检查命令执行是否成功
   if [ $? -ne 0 ]; then

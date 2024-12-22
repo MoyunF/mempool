@@ -3,9 +3,25 @@
 
 SERVER_PID_FILE=server.pid
 
+# 获取 IP 地址
+ip=$(ifconfig | grep -oP 'inet 172\.\d+\.\d+\.\d+' | awk '{print $2}')
+echo "Detected IP: $ip"
+
+# 提取 IP 的最后一个字段
+last_field=$(echo "$ip" | awk -F. '{print $NF}')
+
+# 检查是否为数字，并计算 x-1
+if [[ $last_field =~ ^[0-9]+$ ]]; then
+    new_value=$((last_field - 1))
+    echo "Node id: $new_value"
+else
+    echo "The last ip address is not a valid number: $last_field"
+    exit 1
+fi
+
 if [ -z "${SERVER_PID}" ]; then
-    mkdir ./logs/$2
-    ./server -id $1 -log_dir=./logs/$2 -log_level=DEBUG -log_id=$1 -algorithm=hotstuff > program.log 2>&1 &
+    mkdir ./logs/$1
+    ./server -id $new_value -log_dir=./logs/$1 -log_level=DEBUG -log_id=$new_value -algorithm=hotstuff > program.log 2>&1 &
     echo $! >> ${SERVER_PID_FILE}
     echo "collab启动！"
 else
