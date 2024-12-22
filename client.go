@@ -98,8 +98,7 @@ func (c *HTTPClient) GetURL(key db.Key) (identity.NodeID, string) {
 	} else {
 		replicaID = c.ids[rand.Intn(len(c.ids))]
 	}
-	log.Debugf("send tx to %v", replicaID)
-	log.Debugf("%v", c.HTTP[replicaID]+"/"+strconv.Itoa(int(key)))
+	//log.Debugf("send tx to %v", replicaID)
 	return replicaID, c.HTTP[replicaID] + "/" + strconv.Itoa(int(key))
 }
 
@@ -108,7 +107,6 @@ func (c *HTTPClient) GetURL(key db.Key) (identity.NodeID, string) {
 func (c *HTTPClient) rest(url string, value db.Value) error {
 	method := http.MethodGet
 	var body io.Reader
-	log.Debugf("%v", value)
 	if value != nil {
 		method = http.MethodPut
 		body = bytes.NewBuffer(value)

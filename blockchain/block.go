@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/gitferry/bamboo/crypto/merkle"
+	"github.com/gitferry/bamboo/group"
 	"github.com/kelindar/bitmap"
 
 	"github.com/gitferry/bamboo/crypto"
@@ -32,24 +33,40 @@ type Block struct {
 type Payload struct {
 	MicroblockList []*MicroBlock
 	SigMap         map[crypto.Identifier]map[identity.NodeID]crypto.Signature
+	AckNode        []map[identity.NodeID]struct{} //接收的节点
 }
 
 type MicroBlock struct {
 	ProposalID      crypto.Identifier
+	GroupId         int //add by lxx 代表mb要被发送的执行组是什么
 	Hash            crypto.Identifier
 	Txns            []*message.Transaction
 	Timestamp       time.Time
 	FutureTimestamp time.Time
 	Sender          identity.NodeID
+	IsFake          bool //是否只是个空壳，还没有收到实际内容
 	IsRequested     bool
 	IsForward       bool
 	Bitmap          bitmap.Bitmap
 	Hops            int
+	CommittedNo     int
+
+	CreateTimeStamp      time.Time //小块被创建的时间
+	SendTimeStamp        time.Time //小块被发送的时间
+	ReceiveTimeStamp     time.Time //小块被收到的时间
+	CommittedTimeStamp   time.Time //小块被hotstuff提交的时间
+	ExecutStratTimeStamp time.Time //小块开始执行的时间
+	ExecuteEndTimeStamp  time.Time //小块执行结束的时间
+
+	RouteList []*types.Route //路由的列表
 }
 
 type Proposal struct {
 	BlockHeader
-	HashList []crypto.Identifier
+	HashList  []crypto.Identifier
+	GroupList []int
+	AckNode   []map[identity.NodeID]struct{}
+	MbTime    []time.Time
 }
 
 type PendingBlock struct {
@@ -67,21 +84,25 @@ type rawProposal struct {
 }
 
 // BuildProposal creates a signed proposal
-func BuildProposal(view types.View, qc *QC, prevID crypto.Identifier, payload []crypto.Identifier, proposer identity.NodeID) *Proposal {
+func BuildProposal(view types.View, qc *QC, prevID crypto.Identifier, payload []crypto.Identifier, groupList []int, ackNodeList []map[identity.NodeID]struct{}, mbTime []time.Time, proposer identity.NodeID) *Proposal {
 	p := new(Proposal)
 	p.View = view
 	p.Proposer = proposer
 	p.QC = qc
 	p.HashList = payload
 	p.PrevID = prevID
+	p.GroupList = groupList
+	p.AckNode = ackNodeList
+	p.MbTime = mbTime
 	p.makeID(proposer)
 	return p
 }
 
-func NewPayload(microblockList []*MicroBlock, sigs map[crypto.Identifier]map[identity.NodeID]crypto.Signature) *Payload {
+func NewPayload(microblockList []*MicroBlock, sigs map[crypto.Identifier]map[identity.NodeID]crypto.Signature, ackList []map[identity.NodeID]struct{}) *Payload {
 	return &Payload{
 		MicroblockList: microblockList,
 		SigMap:         sigs,
+		AckNode:        ackList,
 	}
 }
 
@@ -98,6 +119,28 @@ func (pl *Payload) GenerateHashList() []crypto.Identifier {
 		hashList = append(hashList, mb.Hash)
 	}
 	return hashList
+}
+
+func (pl *Payload) GenerateGroupList() []int {
+	groupList := make([]int, 0)
+	for _, mb := range pl.MicroblockList {
+		if mb == nil {
+			continue
+		}
+		groupList = append(groupList, mb.GroupId)
+	}
+	return groupList
+}
+
+func (pl *Payload) GenerateTimeList() []time.Time {
+	timeList := make([]time.Time, 0)
+	for _, mb := range pl.MicroblockList {
+		if mb == nil {
+			continue
+		}
+		timeList = append(timeList, mb.Timestamp)
+	}
+	return timeList
 }
 
 func (pl *Payload) addMicroblock(mb *MicroBlock) {
@@ -127,7 +170,7 @@ func (mb *MicroBlock) AddSentNodes(nodes []identity.NodeID) {
 	}
 }
 
-// BuildBlock fills microblocks to make a block
+// BuildBlock fills microblocks to make a block,
 func BuildBlock(proposal *Proposal, payload *Payload) *Block {
 	return &Block{
 		BlockHeader: proposal.BlockHeader,
@@ -135,12 +178,24 @@ func BuildBlock(proposal *Proposal, payload *Payload) *Block {
 	}
 }
 
+// // 构建区块，包括一些没有收到的微块
+// func BuildBlockWithPending(proposal *Proposal, payload *Payload) *Block {
+
+// 	return &Block{
+// 		BlockHeader: proposal.BlockHeader,
+// 		payload:     payload,
+// 	}
+// }
+
 func NewMicroblock(proposalID crypto.Identifier, txnList []*message.Transaction) *MicroBlock {
 	mb := new(MicroBlock)
 	mb.ProposalID = proposalID
 	mb.Txns = txnList
 	mb.Timestamp = time.Now()
-	mb.Hash = mb.hash() //根据交易生成Hash，但是好像不会验证hhhh
+	mb.CreateTimeStamp = time.Now()
+	mb.Hash = mb.hash()                        //根据交易生成Hash，但是好像不会验证hhhh
+	mb.GroupId = group.GenerateGroupIdByRand() //为mb增加group id
+	mb.RouteList = make([]*types.Route, 0, 10)
 	return mb
 }
 

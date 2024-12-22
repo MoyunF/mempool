@@ -5,12 +5,13 @@ import (
 	"encoding/gob"
 	"errors"
 	"flag"
-	"github.com/gitferry/bamboo/log"
 	"net"
 	"net/url"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/gitferry/bamboo/log"
 )
 
 var Scheme = flag.String("transport", "tcp", "transport scheme (tcp, udp, chan), default tcp")
@@ -183,6 +184,8 @@ func (t *tcp) Listen() {
 						err := decoder.Decode(&m)
 						if err != nil {
 							log.Error(err)
+							log.Error(&m)
+							log.Debugf("%v", conn.RemoteAddr().String())
 							continue
 						}
 						t.recv <- m

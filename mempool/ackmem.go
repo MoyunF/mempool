@@ -2,16 +2,26 @@ package mempool
 
 import (
 	"container/list"
+	"sort"
 	"sync"
+	"time"
 
 	"github.com/gitferry/bamboo/blockchain"
 	"github.com/gitferry/bamboo/config"
 	"github.com/gitferry/bamboo/crypto"
+	"github.com/gitferry/bamboo/group"
 	"github.com/gitferry/bamboo/identity"
+	"github.com/gitferry/bamboo/log"
 	"github.com/gitferry/bamboo/message"
+	"github.com/gitferry/bamboo/node"
 	"github.com/gitferry/bamboo/utils"
 )
 
+/*
+	TODO: 区块打包策略： 贪心、随机、DP
+			后台线程计算最优
+			最优解计算次数打log记录时间
+*/
 type AckMem struct {
 	stableMicroblocks  *list.List
 	txnList            *list.List
@@ -19,23 +29,32 @@ type AckMem struct {
 	pendingMicroblocks map[crypto.Identifier]*PendingMicroblock
 	ackBuffer          map[crypto.Identifier]map[identity.NodeID]crypto.Signature //number of the ack received before mb arrived
 	stableMBs          map[crypto.Identifier]struct{}                             //keeps track of stable microblocks
+	StableBuffer       map[crypto.Identifier]blockchain.Stable                    //保存mb的stable信息
 	bsize              int                                                        // number of microblocks in a proposal
 	msize              int                                                        // byte size of transactions in a microblock
 	memsize            int                                                        // number of microblocks in mempool
 	currSize           int
 	threshhold         int // number of acks needed for a stable microblock
 	totalTx            int64
+	TotalStableMbs     int           //截至目前一共stable的微块个数
+	TotalStableDelay   time.Duration //目前一共使用的时间
 	mu                 sync.Mutex
+	gm                 *group.GroupManager
+	node               node.Node
 }
 
 type PendingMicroblock struct {
-	microblock *blockchain.MicroBlock
-	ackMap     map[identity.NodeID]struct{} // who has sent acks
+	microblock  *blockchain.MicroBlock
+	ackMap      map[identity.NodeID]struct{} // who has sent acks
+	ackNum      int
+	AckInGroup  []identity.NodeID //组内ack
+	AckOutGroup []identity.NodeID //组外ack
+	//增加ack来自哪些节点
 }
 
 // NewAckMem creates a new naive mempool
-func NewAckMem() *AckMem {
-	return &AckMem{
+func NewAckMem(n node.Node, gm *group.GroupManager) *AckMem {
+	ack := &AckMem{
 		bsize:              config.GetConfig().BSize,
 		msize:              config.GetConfig().MSize,
 		memsize:            config.GetConfig().MemSize,
@@ -45,9 +64,13 @@ func NewAckMem() *AckMem {
 		pendingMicroblocks: make(map[crypto.Identifier]*PendingMicroblock),
 		ackBuffer:          make(map[crypto.Identifier]map[identity.NodeID]crypto.Signature),
 		stableMBs:          make(map[crypto.Identifier]struct{}),
+		StableBuffer:       make(map[crypto.Identifier]blockchain.Stable),
 		currSize:           0,
 		txnList:            list.New(),
+		gm:                 gm,
+		node:               n,
 	}
+	return ack
 }
 
 // AddTxn adds a transaction and returns a microblock if msize is reached
@@ -55,11 +78,11 @@ func NewAckMem() *AckMem {
 func (am *AckMem) AddTxn(txn *message.Transaction) (bool, *blockchain.MicroBlock) {
 	// mempool is full
 	if am.RemainingTx() >= int64(am.memsize) {
-		//log.Warningf("mempool's tx list is full")
+		log.Warningf("mempool's tx list is full")
 		return false, nil
 	}
 	if am.RemainingMB() >= int64(am.memsize) {
-		//log.Warningf("mempool's mb is full")
+		log.Warningf("mempool's mb is full")
 		return false, nil
 	}
 	am.totalTx++
@@ -77,6 +100,7 @@ func (am *AckMem) AddTxn(txn *message.Transaction) (bool, *blockchain.MicroBlock
 		//set the currSize to curr trans, since it is the only one does not add to the microblock
 		var id crypto.Identifier
 		am.currSize = tranSize
+		log.Debugf("totalSize :%v > am.msize:%v generate mb", totalSize, am.msize)
 		newBlock := blockchain.NewMicroblock(id, am.makeTxnSlice())
 		am.txnList.PushBack(txn)
 		return true, newBlock
@@ -96,6 +120,16 @@ func (am *AckMem) AddTxn(txn *message.Transaction) (bool, *blockchain.MicroBlock
 	}
 }
 
+//仅用来创建微块，只包含最基本的交易信息等
+func (am *AckMem) GenerateMb(txs []*message.Transaction) (bool, *blockchain.MicroBlock) {
+	if am.RemainingMB() >= int64(am.memsize) {
+		log.Warningf("Mempool is full, can't generate MB")
+		return false, nil
+	}
+	var id crypto.Identifier
+	return true, blockchain.NewMicroblock(id, txs)
+}
+
 // AddMicroblock adds a microblock into a FIFO queue
 // return an err if the queue is full (memsize)
 func (am *AckMem) AddMicroblock(mb *blockchain.MicroBlock) error {
@@ -104,17 +138,37 @@ func (am *AckMem) AddMicroblock(mb *blockchain.MicroBlock) error {
 	//if am.microblocks.Len() >= am.memsize {
 	//	return errors.New("the memory queue is full")
 	//}
-	_, exists := am.microblockMap[mb.Hash]
-	if exists {
+	mb_old, exists := am.microblockMap[mb.Hash]
+	if exists && mb_old.IsFake == false {
+		//之前收到过这个区块
+		return nil
+	}
+	if exists && mb_old.IsFake == true {
+		//之前提起受到过区块的stable信息，构建了一个假区块给共识模块使用，现在收到了真正的区块，替换掉郊区快
+		log.Debugf("AddMircroblock() --- [%v] receive a mb after got its stable, mb's hash[%x], mb received 's fake info [%v]", am.node.ID(),
+			mb.Hash, mb.IsFake)
+		am.microblockMap[mb.Hash] = mb
+		//TODO:存疑是否需要交给执行层
 		return nil
 	}
 	//pm容器，用来判断谁给这个微块发送了ack
 	pm := &PendingMicroblock{
-		microblock: mb,
-		ackMap:     make(map[identity.NodeID]struct{}),
+		microblock:  mb,
+		ackMap:      make(map[identity.NodeID]struct{}),
+		ackNum:      0,
+		AckInGroup:  make([]identity.NodeID, 0),
+		AckOutGroup: make([]identity.NodeID, 0),
 	}
 	pm.ackMap[mb.Sender] = struct{}{}
+	pm.ackNum++
+	if am.gm.IsInGroup(mb.GroupId, am.node.ID()) {
+		//如果微块是自己组内的
+		pm.AckInGroup = append(pm.AckInGroup, mb.Sender)
+	} else {
+		pm.AckOutGroup = append(pm.AckOutGroup, mb.Sender)
+	}
 	am.microblockMap[mb.Hash] = mb
+	log.Debugf("收到了mb：%x ,mb's fake : %v", mb.Hash, mb.IsFake)
 
 	//check if there are some acks of this microblock arrived before
 	buffer, received := am.ackBuffer[mb.Hash]
@@ -123,13 +177,17 @@ func (am *AckMem) AddMicroblock(mb *blockchain.MicroBlock) error {
 		for id, _ := range buffer {
 			//am.pendingMicroblocks[mb.Hash].ackMap[ack] = struct{}{}
 			pm.ackMap[id] = struct{}{}
+			pm.ackNum++
+			pm.AckInGroup = append(pm.AckInGroup, id)
 		}
-		if len(pm.ackMap) >= am.threshhold {
+		if pm.ackNum >= am.threshhold {
 			if _, exists = am.stableMBs[mb.Hash]; !exists {
 				am.stableMicroblocks.PushBack(mb)
 				am.stableMBs[mb.Hash] = struct{}{}
+				am.TotalStableMbs++
+				am.TotalStableDelay += time.Now().Sub(mb.Timestamp)
 				delete(am.pendingMicroblocks, mb.Hash)
-				//log.Debugf("microblock id: %x becomes stable from buffer", mb.Hash)
+				log.Debugf("AddMircoblock () --- [%v] mb's hash: %x becomes stable from buffer", am.node.ID(), mb.Hash)
 			}
 		} else {
 			am.pendingMicroblocks[mb.Hash] = pm
@@ -147,26 +205,112 @@ func (am *AckMem) AddAck(ack *blockchain.Ack) {
 	target, received := am.pendingMicroblocks[ack.MicroblockID]
 	//check if the ack arrives before the microblock
 	if received {
-		target.ackMap[ack.Receiver] = struct{}{}
-		if len(target.ackMap) >= am.threshhold {
+		if config.GetConfig().BroadcastByGroup == true {
+			//分组
+			if !ack.OutGroup {
+				target.ackMap[ack.Receiver] = struct{}{}
+				target.ackNum++
+				target.AckInGroup = append(target.AckInGroup, ack.Receiver)
+				log.Debugf("AddAck() --- [%v]receive ack from own group, for mb's hash[%x], ack num become [%v]", am.node.ID(), ack.MicroblockID, target.ackNum)
+			} else {
+				target.ackMap[ack.Receiver] = struct{}{}
+				target.AckOutGroup = append(target.AckOutGroup, ack.Receiver)
+				log.Debugf("AddAck() --- [%v]receive ack from out group, for mb's hash[%x], ack num don't change [%v]", am.node.ID(), ack.MicroblockID, target.ackNum)
+			}
+		} else {
+			//不分组
+			target.ackMap[ack.Receiver] = struct{}{}
+			target.ackNum++
+			log.Debugf("AddAck() --- [%v]receive ack, for mb's hash[%xv], ack num become [%v]", am.node.ID(), ack.MicroblockID, target.ackNum)
+			target.AckInGroup = append(target.AckInGroup, ack.Receiver)
+		}
+		if target.ackNum >= am.threshhold {
 			if _, exists := am.stableMBs[target.microblock.Hash]; !exists {
 				am.stableMicroblocks.PushBack(target.microblock)
 				am.stableMBs[target.microblock.Hash] = struct{}{}
+				am.TotalStableMbs++
+				am.TotalStableDelay += time.Now().Sub(target.microblock.Timestamp)
 				delete(am.pendingMicroblocks, ack.MicroblockID)
+				//构建stable信息
+				stable := blockchain.Stable{
+					AckInGroup:     make([]identity.NodeID, len(target.AckInGroup)),
+					AckOutGroup:    make([]identity.NodeID, len(target.AckOutGroup)),
+					MicroblockID:   target.microblock.Hash,
+					Sender:         am.node.ID(),
+					GroupId:        target.microblock.GroupId,
+					MbCreationTime: target.microblock.Timestamp,
+				}
+				am.StableBuffer[target.microblock.Hash] = stable //保存stable信息
+				copy(stable.AckInGroup, target.AckInGroup)
+				copy(stable.AckOutGroup, target.AckOutGroup)
+				log.Debugf("AddAck() --- [%v]get a stable mb, for mb's hash[%x], ack num become [%v], broadcast to all nodes", am.node.ID(), ack.MicroblockID, target.ackNum)
+				am.node.Broadcast(stable)
 			}
 		}
 	} else {
 		//ack arrives before microblock, record the number of ack received before microblock
-		//let the addMicroblock do the rest.
-		_, exist := am.ackBuffer[ack.MicroblockID]
-		if exist {
-			am.ackBuffer[ack.MicroblockID][ack.Receiver] = ack.Signature
+		//let the addMicrobslock do the rest.
+		if ack.OutGroup != true {
+			//组内的回复才奏效，缺省值为false，所以不分组的时候也不影响逻辑
+			log.Debugf("AddAck() --- [%v]receive ack before mb's hash[%x],  buffer ack", am.node.ID(), ack.MicroblockID)
+			_, exist := am.ackBuffer[ack.MicroblockID]
+			if exist {
+				am.ackBuffer[ack.MicroblockID][ack.Receiver] = ack.Signature
+			} else {
+				temp := make(map[identity.NodeID]crypto.Signature, 0)
+				temp[ack.Receiver] = ack.Signature
+				am.ackBuffer[ack.MicroblockID] = temp
+			}
 		} else {
-			temp := make(map[identity.NodeID]crypto.Signature, 0)
-			temp[ack.Receiver] = ack.Signature
-			am.ackBuffer[ack.MicroblockID] = temp
+			log.Debugf("AddAck() --- [%v]receive ack before mb's hash[%x], but outgroup, not buffer", am.node.ID(), ack.MicroblockID)
 		}
 	}
+}
+
+func (am *AckMem) AddStable(stable *blockchain.Stable) {
+	am.mu.Lock()
+	defer am.mu.Unlock()
+	if _, ok := am.stableMBs[stable.MicroblockID]; ok {
+		//如果自己已经确认过了
+		return
+	}
+	//保存stable信息
+	am.StableBuffer[stable.MicroblockID] = *stable
+
+	target, received := am.pendingMicroblocks[stable.MicroblockID]
+	//check if the stable arrives before the microblock
+	if received {
+		am.stableMicroblocks.PushBack(target.microblock)
+		am.stableMBs[target.microblock.Hash] = struct{}{}
+		am.TotalStableMbs++
+		am.TotalStableDelay += time.Now().Sub(target.microblock.Timestamp)
+		delete(am.pendingMicroblocks, stable.MicroblockID)
+	}
+	_, exist := am.microblockMap[stable.MicroblockID]
+	if !exist {
+		//收到了stable但是没有收到微块
+		log.Debugf("AddStable() --- [%v]receive stable, but don't have mb, mb's hash[%x]", am.node.ID(), stable.MicroblockID)
+		mb := &blockchain.MicroBlock{
+			IsFake:    true,
+			Hash:      stable.MicroblockID,
+			GroupId:   stable.GroupId,
+			Timestamp: stable.MbCreationTime,
+		}
+		am.microblockMap[mb.Hash] = mb
+		am.stableMicroblocks.PushBack(mb)
+		am.stableMBs[mb.Hash] = struct{}{}
+
+		am.TotalStableMbs++
+		am.TotalStableDelay += time.Now().Sub(mb.Timestamp)
+
+		am.microblockMap[mb.Hash] = mb //变量逃逸
+	}
+}
+
+func (am *AckMem) HandleMissingStableMb(mb *blockchain.MicroBlock) {
+	am.mu.Lock()
+	defer am.mu.Unlock()
+	am.microblockMap[mb.Hash] = mb
 }
 
 // GeneratePayload generates a list of microblocks according to bsize
@@ -175,22 +319,56 @@ func (am *AckMem) GeneratePayload() *blockchain.Payload {
 	var batchSize int
 	am.mu.Lock()
 	defer am.mu.Unlock()
-	sigMap := make(map[crypto.Identifier]map[identity.NodeID]crypto.Signature, 0)
+	if config.Configuration.Onlyworker == true {
+		for {
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
 
+	//重排stable
+	items := make([]*blockchain.MicroBlock, 0, am.stableMicroblocks.Len())
+	for e := am.stableMicroblocks.Front(); e != nil; e = e.Next() {
+		items = append(items, e.Value.(*blockchain.MicroBlock))
+	}
+
+	// 使用切片的排序功能对元素进行排序
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].GroupId < items[j].GroupId
+	})
+
+	// 将排序后的元素重新放回 list.List
+	am.stableMicroblocks.Init()
+	for _, item := range items {
+		am.stableMicroblocks.PushBack(item)
+	}
+
+	sigMap := make(map[crypto.Identifier]map[identity.NodeID]crypto.Signature, 0)
+	log.Debugf("GeneratePayload() --- [%v] has %v stable mb in mempool", am.node.ID(), am.stableMicroblocks.Len())
 	if am.stableMicroblocks.Len() >= am.bsize {
 		batchSize = am.bsize
 	} else {
+		// if config.GetConfig().BroadcastByGroup == true {
+		// 	time.Sleep(200 * time.Millisecond)
+		// }
 		batchSize = am.stableMicroblocks.Len()
 	}
+	// for {
+	// 	if am.stableMicroblocks.Len() >= am.bsize/2 {
+	// 		batchSize = am.bsize
+	// 		break
+	// 	}
+	// }
 	microblockList := make([]*blockchain.MicroBlock, 0)
+	ackNodeList := make([]map[identity.NodeID]struct{}, 0)
 
 	for i := 0; i < batchSize; i++ {
 		mb := am.front()
 		if mb == nil {
 			break
 		}
-		//log.Debugf("microblock id: %x is deleted from mempool when proposing", mb.Hash)
+		//log.Debugf("GeneratePayload() --- [%v]  mb [%x] is deleted from mempool when proposing", am.node.ID(), mb.Hash)
 		microblockList = append(microblockList, mb)
+		ackNodeList = append(ackNodeList, am.GenerateAckNodeList(mb))
 
 		sigs := make(map[identity.NodeID]crypto.Signature, 0)
 		count := 0
@@ -203,8 +381,21 @@ func (am *AckMem) GeneratePayload() *blockchain.Payload {
 		}
 		sigMap[mb.Hash] = sigs
 	}
+	//log.Debugf("GeneratePayload() --- [%v]  fetch %v mb as payload", am.node.ID(), batchSize)
+	return blockchain.NewPayload(microblockList, sigMap, ackNodeList)
+}
 
-	return blockchain.NewPayload(microblockList, sigMap)
+func (am *AckMem) GenerateAckNodeList(mb *blockchain.MicroBlock) map[identity.NodeID]struct{} {
+	stable, ok := am.StableBuffer[mb.Hash]
+	result := make(map[identity.NodeID]struct{}, 0)
+	if ok {
+		for _, v := range stable.AckInGroup {
+			result[v] = struct{}{}
+		}
+	} else {
+		log.Debugf("没找到stable信息")
+	}
+	return result
 }
 
 // CheckExistence checks if the referred microblocks in the proposal exists
@@ -235,6 +426,11 @@ func (am *AckMem) FindMicroblock(id crypto.Identifier) (bool, *blockchain.MicroB
 	am.mu.Lock()
 	defer am.mu.Unlock()
 	mb, found := am.microblockMap[id]
+	if found {
+		if mb.IsFake == false {
+			return false, nil
+		}
+	}
 	return found, mb
 }
 
@@ -267,8 +463,88 @@ func (am *AckMem) FillProposal(p *blockchain.Proposal) *blockchain.PendingBlock 
 				break
 			}
 		}
+
 		if !found {
 			missingBlocks[id] = struct{}{}
+		}
+	}
+	return blockchain.NewPendingBlock(p, missingBlocks, existingBlocks)
+
+}
+
+func (am *AckMem) FetchMB(p *blockchain.Proposal) *blockchain.PendingBlock {
+	am.mu.Lock()
+	defer am.mu.Unlock()
+	existingBlocks := make([]*blockchain.MicroBlock, 0)
+	missingBlocks := make(map[crypto.Identifier]struct{}, 0)
+	for index, id := range p.HashList {
+		//把相关的pending和stable都删掉
+		_, exists := am.pendingMicroblocks[id]
+		if exists {
+			delete(am.pendingMicroblocks, id)
+			log.Debugf("FetchMB() --- [%v]microblock id: %x is deleted from pending when filling", am.node.ID(), id)
+		}
+		for e := am.stableMicroblocks.Front(); e != nil; e = e.Next() {
+			// do something with e.Value
+			mb := e.Value.(*blockchain.MicroBlock)
+			if mb.Hash == id {
+				am.stableMicroblocks.Remove(e)
+				log.Debugf("FetchMB() --- [%v]microblock id: %x is deleted from stable when filling", am.node.ID(), mb.Hash)
+				break
+			}
+		}
+
+		mb, ok := am.microblockMap[id]
+		if ok {
+			log.Debugf("FetchMB() --- [%v]Porposal中的mb [%x]，在本地找到", am.node.ID(), id)
+			existingBlocks = append(existingBlocks, mb)
+		} else {
+			log.Debugf("FetchMB() --- [%v]Porposal中的mb [%x]，在本地无法找到", am.node.ID(), id)
+			mb := &blockchain.MicroBlock{
+				IsFake:    true,
+				Hash:      id,
+				GroupId:   p.GroupList[index],
+				Timestamp: p.MbTime[index],
+			}
+			//存疑，是否应该加入到missing中
+			existingBlocks = append(existingBlocks, mb)
+		}
+	}
+	return blockchain.NewPendingBlock(p, missingBlocks, existingBlocks)
+}
+
+// FillProposal pulls microblocks from the mempool and build a pending block,
+// a pending block should include the proposal, micorblocks that already exist,
+// and a missing list if there's any
+//payload包含收到的和没收到的mb
+func (am *AckMem) FillProposalFromGroup(p *blockchain.Proposal) *blockchain.PendingBlock {
+	am.mu.Lock()
+	defer am.mu.Unlock()
+	existingBlocks := make([]*blockchain.MicroBlock, 0)
+	missingBlocks := make(map[crypto.Identifier]struct{}, 0)
+	for _, id := range p.HashList {
+		found := false
+		_, exists := am.pendingMicroblocks[id]
+		if exists {
+			found = true
+			existingBlocks = append(existingBlocks, am.pendingMicroblocks[id].microblock)
+			delete(am.pendingMicroblocks, id)
+			//log.Debugf("microblock id: %x is deleted from pending when filling", id)
+		}
+		for e := am.stableMicroblocks.Front(); e != nil; e = e.Next() {
+			// do something with e.Value
+			mb := e.Value.(*blockchain.MicroBlock)
+			if mb.Hash == id {
+				existingBlocks = append(existingBlocks, mb)
+				found = true
+				am.stableMicroblocks.Remove(e)
+				//log.Debugf("microblock id: %x is deleted from stable when filling", mb.Hash)
+				break
+			}
+		}
+		if !found {
+			//没找到的加一个假微块进来
+			// pendingMb :=
 		}
 	}
 	return blockchain.NewPendingBlock(p, missingBlocks, existingBlocks)
@@ -332,6 +608,30 @@ func (am *AckMem) TotalMB() int64 {
 	am.mu.Lock()
 	defer am.mu.Unlock()
 	return int64(len(am.microblockMap))
+}
+
+func (am *AckMem) TotalStableMb() int {
+	am.mu.Lock()
+	defer am.mu.Unlock()
+	return am.TotalStableMbs
+}
+
+func (am *AckMem) TotalStableTime() time.Duration {
+	am.mu.Lock()
+	defer am.mu.Unlock()
+	return am.TotalStableDelay
+}
+
+func (am *AckMem) StableMB() int64 {
+	am.mu.Lock()
+	defer am.mu.Unlock()
+	return int64(am.stableMicroblocks.Len())
+}
+
+func (am *AckMem) PendingMB() int64 {
+	am.mu.Lock()
+	defer am.mu.Unlock()
+	return int64(len(am.pendingMicroblocks))
 }
 
 func (am *AckMem) RemainingMB() int64 {

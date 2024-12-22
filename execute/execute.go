@@ -1,12 +1,17 @@
 package execute
 
 import (
-	"encoding/json"
 	"sync"
 	"time"
 
 	"github.com/gitferry/bamboo/blockchain"
+	"github.com/gitferry/bamboo/config"
+	"github.com/gitferry/bamboo/crypto"
+	"github.com/gitferry/bamboo/group"
+	"github.com/gitferry/bamboo/identity"
 	"github.com/gitferry/bamboo/log"
+	"github.com/gitferry/bamboo/message"
+	"github.com/gitferry/bamboo/node"
 )
 
 /*
@@ -15,6 +20,7 @@ import (
 
 var startForCoop chan struct{} //是否可以开启协作处理
 type GroupNum int
+type mbHash crypto.Identifier
 
 //解析comman
 type Tx struct {
@@ -24,31 +30,271 @@ type Tx struct {
 }
 
 type Executor struct {
-	state            map[string]int //世界状态
-	executedTxsTotal int            //成功的交易总数
-	executedTxs      int            //一个区块的数目
-	delayTotal       time.Duration  //所有交易的执行时间
-	lock             sync.Mutex
+	node                node.Node
+	state               map[string]int //世界状态
+	executedTxsTotal    int            //成功的交易总数
+	executedTxsForQuery int            //每次查询清零，计算两次查询之间的数
+	delayTotal          time.Duration  //所有交易的执行时间
+	delayTotalForQuery  time.Duration  //每次查询清零
+	gm                  *group.GroupManager
+	mbPending           mbList
+	lock                sync.Mutex
+	MbReceive           chan []*blockchain.MicroBlock
+	MissReceive         chan *blockchain.MicroBlock
+	executeReady        chan interface{} //是否可以尝试执行
+	ReceiveResult       chan *ExecuteResult
+	ResultBuffer        map[mbHash]*ExecuteResult //保存执行成功的结果
+}
+
+type ExecuteResult struct {
+	PropsalId identity.NodeID  //广播者的id
+	Sig       crypto.Signature //广播者的签名
+	Mb        mbHash           //执行成功的块hash
+	No        int              //微块顺序
+	Result    string           //区块执行后的状态
+
+	buildTime   time.Time //生成结果的时间
+	receiveTime time.Time //收到结果的时间
+	enableTime  time.Time //结果的时间
+}
+
+//区块执行队列
+type mbList struct {
+	mbs   []*blockchain.MicroBlock                     //执行队列
+	done  map[int]map[identity.NodeID]crypto.Signature //mb key：微块的顺序从1开始 value：确认的人的签名
+	table map[mbHash]*blockchain.MicroBlock            //mb在list中的位置
+}
+
+func (e *Executor) HandleMB() {
+	for {
+		select {
+		case mb := <-e.MbReceive:
+			//接受执行
+			e.AddMbToExecute(mb)
+		case mb := <-e.MissReceive:
+			//收到丢失的区块
+			e.HandleMiss(mb)
+		case result := <-e.ReceiveResult:
+			e.HandleResult(result)
+		default:
+			continue
+		}
+	}
+}
+
+//添加微块到执行队列中
+func (e *Executor) AddMbToExecute(mb []*blockchain.MicroBlock) {
+	e.lock.Lock()
+	defer e.lock.Unlock()
+
+	if config.GetConfig().BroadcastByGroup == true {
+
+		log.Debugf("有%v个微块添加给执行队列", len(mb))
+
+		e.mbPending.mbs = append(e.mbPending.mbs, mb...)
+		log.Debugf("添加mb到执行队列,队列长度：%v", len(e.mbPending.mbs))
+
+		done_index := -1
+		for index, v := range e.mbPending.mbs {
+			if e.CheckResult(v) == true {
+				done_index = index
+				continue
+			}
+		}
+		if done_index != -1 {
+			log.Debugf("处理一下之前缓存的result")
+			for i := 0; i <= done_index; i++ {
+				e.updateState(e.mbPending.mbs[0])
+				e.mbPending.mbs = e.mbPending.mbs[1:]
+			}
+		}
+	} else {
+		e.mbPending.mbs = append(e.mbPending.mbs, mb...)
+		log.Debugf("添加mb到执行队列,队列长度：%v", len(e.mbPending.mbs))
+	}
+	e.ExecuteThread()
+}
+
+func (e *Executor) ExecuteThread() { //表示是有一个mb被成功执行
+	var lastmb *blockchain.MicroBlock = nil
+	e.ShowQueueStatus()
+	if config.GetConfig().BroadcastByGroup == true {
+		for _, mb := range e.mbPending.mbs {
+			if e.gm.IsInMyGroup(mb.GroupId) {
+				if mb.IsFake == true {
+					//请求重传
+					missStableRequest := message.MissingStableMBRequest{
+						RequesterID: e.node.ID(), //本人id
+						MbID:        mb.Hash,
+					}
+					requestNode := make([]identity.NodeID, 0)
+
+					log.Debugf("ExecuteThread() --- [%v] 当前需要我执行的mb:%x,没有，向组内节点要", e.node.ID(), mb.Hash)
+					//TODO:requestNode不全
+					requestNode = append(requestNode)
+					e.node.MulticastQuorum(requestNode, missStableRequest)
+					break
+				} else {
+					log.Debugf("ExecuteThread() --- [%v] 在执行组中 组：%v", e.node.ID(), mb.GroupId)
+					lastmb = mb
+					e.Execute(mb)
+					e.mbPending.mbs = e.mbPending.mbs[1:]
+				}
+			} else {
+				log.Debugf("ExecuteThread() ---[%v] 当前队头任务%x是%v分组负责，无法执行", e.node.ID(), mb.Hash, mb.GroupId)
+				break
+			}
+		}
+		if lastmb != nil {
+			sig, err := crypto.PrivSign(lastmb.Hash[:], e.node.ID(), nil)
+			if err != nil {
+				log.Debugf("ExecuteThread() ---[%v]对结果签名失败", e.node.ID())
+			} else {
+				fakestate := ""
+				for i := 0; i < 200; i++ {
+					fakestate += "0x112312912480:32"
+				}
+				result := &ExecuteResult{PropsalId: e.node.ID(), Sig: sig,
+					Mb:     mbHash(lastmb.Hash),
+					Result: fakestate,
+					No:     lastmb.CommittedNo,
+				}
+				//广播
+				log.Debugf("ExecuteThread() ---[%v] mb%x结果执行完成，广播给其他节点", e.node.ID(), result.Mb)
+				//e.node.MulticastQuorum2(e.gm.NotInGroup(lastmb.GroupId), result)
+				e.node.Broadcast(result)
+
+				//TODO: 将执行结果发给消息队列
+			}
+		}
+	} else {
+		//不分组
+		for _, mb := range e.mbPending.mbs {
+			if mb.IsFake == true {
+				//请求重传
+				break
+			} else {
+				e.Execute(mb)
+				e.mbPending.mbs = e.mbPending.mbs[1:]
+			}
+		}
+	}
+}
+
+//收到微块result
+func (e *Executor) HandleResult(result *ExecuteResult) {
+	e.lock.Lock()
+	defer e.lock.Unlock()
+	high_done_index := 0
+	for i := 1; i <= result.No; i++ {
+		if record, eixst := e.mbPending.done[i]; eixst {
+			record[result.PropsalId] = result.Sig
+		} else {
+			e.mbPending.done[i] = make(map[identity.NodeID]crypto.Signature)
+			e.mbPending.done[i][result.PropsalId] = result.Sig
+		}
+
+		if len(e.mbPending.done[i]) >= config.GetConfig().Q {
+			//>= f+1个成功
+			//收到f+1个执行结果
+			high_done_index = i
+		}
+	}
+
+	log.Debugf("HandleResult() --- [%v] 收到来自%v的执行成功，执行的mb是%x,目前一共有个%v个执行成功", e.node.ID(), result.PropsalId, result.Mb, len(e.mbPending.done[result.No]))
+	if high_done_index != 0 {
+		//又可以更新的
+		log.Debugf("HandleResult() --- [%v] 执行队列%v以及之前的都被执行成功了", e.node.ID(), high_done_index)
+		e.mbReady(high_done_index)
+	}
+}
+
+//判断是微块是否已经被执行过
+func (e *Executor) CheckResult(mb *blockchain.MicroBlock) bool {
+	if len(e.mbPending.done[mb.CommittedNo]) >= config.GetConfig().Q {
+		log.Debugf("HandleResult() ---[%v] 微块 [%x ]添加到队列之前就被执行了", e.node.ID(), mb.Hash)
+		return true
+	}
+	return false
+}
+
+//收到丢失块
+func (e *Executor) HandleMiss(mb *blockchain.MicroBlock) {
+	e.lock.Lock()
+	defer e.lock.Unlock()
+	found := false
+	for _, mbp := range e.mbPending.mbs {
+		if mbp.Hash == mb.Hash && mbp.IsFake == true {
+			//找到了阻塞块
+			*mbp = *mb //深拷贝
+			found = true
+			log.Debugf("HandleResult() --- [%v] 收到被提交但是本地没有存储的mb[%x]，从节点[%v]", e.node.ID(), mb.ProposalID, mbp.Hash)
+		}
+	}
+	log.Debugf("HandleResult() --- [%v] 收到了一个丢失的区块mb [%x]从节点[%v]， 但这个小块没有被提交过", e.node.ID(), mb.ProposalID, mb.Hash)
+	if found == true {
+		e.ExecuteThread()
+	}
+}
+
+//mbHash对应的微块就绪了
+func (e *Executor) mbReady(commitNo int) {
+	end_index := -1
+	for index, mb := range e.mbPending.mbs {
+		if mb.CommittedNo == commitNo {
+			end_index = index
+		}
+	}
+
+	if end_index == -1 {
+		log.Debugf("HandleResult() --- [%v] 收到执行成功，但是对应的微块还没到，当前队列长度%v", e.node.ID(), len(e.mbPending.mbs))
+	}
+
+	for i := 0; i <= end_index; i++ {
+		e.updateState(e.mbPending.mbs[0])
+		e.mbPending.mbs = e.mbPending.mbs[1:] //丢失队头
+	}
+
+	// for _, mb := range e.mbPending.mbs {
+	// 	if !mb.IsFake && e.gm.IsInMyGroup(mb.GroupId) {
+	// 		e.ExecuteAndBroadcast(mb)
+	// 		e.mbPending.mbs = e.mbPending.mbs[1:]
+	// 	}
+	// }
+	log.Debugf("HandleResult() ---[%v]根据收到的执行结果，更新了%v个mb的状态,当前队列长度%v", e.node.ID(), end_index+1, len(e.mbPending.mbs))
+	e.ExecuteThread()
 }
 
 var executor *Executor = nil
 var mu sync.Mutex
 
-func NewExecutor() *Executor {
+func NewExecutor(node node.Node) *Executor {
 	//单例模式
 	mu.Lock()
 	defer mu.Unlock()
 	if executor == nil {
+		log.Debugf("初始化执行器")
 		executor = new(Executor)
+		executor.gm = group.NewGroupManager(node.ID())
 		executor.state = make(map[string]int)
+		executor.node = node
+		executor.mbPending = mbList{
+			mbs:   make([]*blockchain.MicroBlock, 0),
+			done:  make(map[int]map[identity.NodeID]crypto.Signature),
+			table: make(map[mbHash]*blockchain.MicroBlock),
+		}
+		executor.MbReceive = make(chan []*blockchain.MicroBlock, 10000)
+		executor.MissReceive = make(chan *blockchain.MicroBlock, 10000)
+		executor.ReceiveResult = make(chan *ExecuteResult, 10000)
+		executor.ResultBuffer = make(map[mbHash]*ExecuteResult, 10000)
 		return executor
 	}
 	return executor
 }
 
-func (e *Executor) ExecuteForSerial(mb *blockchain.MicroBlock) {
-	//处理可并发微块
-	e.fakeExecute(mb)
+func (e *Executor) ExecuteForSerial(mbs []*blockchain.MicroBlock) {
+	//用于串行执行
+
 }
 
 func (e *Executor) ExecuteForParallel(mb *blockchain.MicroBlock) {
@@ -66,55 +312,92 @@ func (e *Executor) ExecuteForCoop(mb *blockchain.MicroBlock, befor GroupNum, cur
 
 //区块执行逻辑
 func (e *Executor) rawExecute(mb *blockchain.MicroBlock) {
-	e.lock.Lock()
-	defer e.lock.Unlock()
-
-	log.Debugf("execute mb")
+	log.Debugf("rawExecute() : [%v] execute mb [%x]", e.node.ID(), mb.Hash)
 	for _, transaction := range mb.Txns {
-		tx := &Tx{}
-		err := json.Unmarshal(transaction.Command.Value, &tx)
-		if err != nil {
-			//解析成功
-			log.Errorf("tx wrong : %v", err)
-		} else {
-			log.Debugf("len : %v", len(transaction.Command.Value))
-			log.Debugf("body: %v len : %v", transaction.Command.Value, len(transaction.Command.Value))
-			log.Debugf("from: %v to: %v", tx.From, tx.To)
-			e.state[tx.From] += 1
-			e.state[tx.To] += 1
-			e.executedTxsTotal += 1
-			e.delayTotal += time.Now().Sub(transaction.Timestamp)
-			log.Debugf("execute delay = %v ms", time.Now().Sub(transaction.Timestamp).Milliseconds())
-			log.Debugf("totaldelay = %v ms", e.delayTotal.Milliseconds())
-
-		}
-
-	}
-}
-
-//假的区块执行逻辑
-func (e *Executor) fakeExecute(mb *blockchain.MicroBlock) {
-	e.lock.Lock()
-	defer e.lock.Unlock()
-
-	log.Debugf("execute mb")
-	for _, transaction := range mb.Txns {
-		log.Debugf("fake tx, len : %v", len(transaction.Command.Value))
 		e.state["1"] += 1
 		e.state["2"] += 1
 		e.executedTxsTotal += 1
+		e.executedTxsForQuery += 1
 		e.delayTotal += time.Now().Sub(transaction.Timestamp)
-		log.Debugf("execute delay = %v ms", time.Now().Sub(transaction.Timestamp).Milliseconds())
-		log.Debugf("totaldelay = %v ms", e.delayTotal.Milliseconds())
+		e.delayTotalForQuery += time.Now().Sub(transaction.Timestamp)
+	}
+}
+
+//仿真区块执行逻辑
+func (e *Executor) Execute(mb *blockchain.MicroBlock) {
+
+	log.Debugf("Execute() : [%v] execute mb [%x]", e.node.ID(), mb.Hash)
+	for _, transaction := range mb.Txns {
+		//time.Sleep(10 * time.Millisecond)
+		e.state["1"] += 1
+		e.state["2"] += 1
+		e.executedTxsTotal += 1
+		e.executedTxsForQuery += 1
+		e.delayTotal += time.Now().Sub(transaction.Timestamp)
+		e.delayTotalForQuery += time.Now().Sub(transaction.Timestamp)
+	}
+}
+
+//更新被其他人执行的状态
+func (e *Executor) updateState(mb *blockchain.MicroBlock) {
+
+	log.Debugf("updateState() : [%v] 更新mb [%x] 后执行的状态", e.node.ID(), mb.Hash)
+	for _, transaction := range mb.Txns {
+		e.executedTxsTotal += 1
+		e.delayTotal += time.Now().Sub(transaction.Timestamp)
+		// log.Debugf("execute delay = %v ms", time.Now().Sub(transaction.Timestamp).Milliseconds())
+		// log.Debugf("totaldelay = %v ms", e.delayTotal.Milliseconds())
 	}
 }
 
 //计算交易确认时延 ms
-func (e *Executor) Delay() float64 {
+func (e *Executor) DelayForQuery() float64 {
 	e.lock.Lock()
 	e.lock.Unlock()
 	return float64(
-		float64(e.delayTotal.Milliseconds()) /
-			float64(e.executedTxsTotal),
+		float64(e.delayTotalForQuery.Milliseconds()) /
+			float64(e.executedTxsForQuery),
 	)
+}
+
+//计算交易确认时延 ms
+func (e *Executor) TotalNum() int {
+	e.lock.Lock()
+	defer e.lock.Unlock()
+	return e.executedTxsTotal
+}
+
+//计算交易确认时延 ms
+func (e *Executor) TotalNumForQuery() int {
+	e.lock.Lock()
+	defer e.lock.Unlock()
+	return e.executedTxsForQuery
+}
+
+//清空数据，为下次查询准备
+func (e *Executor) Reset() {
+	e.lock.Lock()
+	defer e.lock.Unlock()
+	e.delayTotalForQuery = 0
+	e.executedTxsForQuery = 0
+}
+
+//是否准备好执行当前mb,wait Id为前一个微块的id
+func (e *Executor) readyForExecute(waitId int) {
+
+}
+
+func (e *Executor) ShowQueueStatus() {
+	// e.lock.Lock()
+	// defer e.lock.Unlock()
+
+	for _, v := range e.mbPending.mbs {
+		// log.Debugf("is fake:%v", v.IsFake)
+		// log.Debugf("group:%v", v.GroupId)
+		// log.Debugf("is In my groop:%v", e.gm.IsInMyGroup(v.GroupId))
+		// if _, ok := e.mbPending.done[mbHash(v.Hash)]; ok {
+		// 	log.Debugf("have receive %v done", len(e.mbPending.done[mbHash(v.Hash)]))
+		// }
+		log.Resultf("mb:%x, group: %v,done:%v, mb'hash:%v", v.CommittedNo, v.GroupId, len(e.mbPending.done[v.CommittedNo]), v.Hash)
+	}
 }

@@ -2,6 +2,8 @@ package mempool
 
 import (
 	"container/list"
+	"sync"
+
 	"github.com/gitferry/bamboo/blockchain"
 	"github.com/gitferry/bamboo/config"
 	"github.com/gitferry/bamboo/crypto"
@@ -10,7 +12,6 @@ import (
 	"github.com/gitferry/bamboo/message"
 	"github.com/gitferry/bamboo/pq"
 	"github.com/gitferry/bamboo/utils"
-	"sync"
 )
 
 type Timemem struct {
@@ -111,7 +112,7 @@ func (tm *Timemem) GeneratePayload() *blockchain.Payload {
 		}
 		microblockList = append(microblockList, mb.(*blockchain.MicroBlock))
 	}
-	return blockchain.NewPayload(microblockList, nil)
+	return blockchain.NewPayload(microblockList, nil, nil)
 }
 
 // CheckExistence checks if the referred microblocks in the proposal exists

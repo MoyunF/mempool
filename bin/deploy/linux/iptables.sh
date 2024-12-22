@@ -1,0 +1,1 @@
+iptables -t mangle -A PREROUTING -p tcp --dport 2629 -j MARK --set-mark 1 && iptables -t mangle -A OUTPUT -p tcp --sport 2629 -j MARK --set-mark 1 && tc qdisc add dev eth0 root handle 1: prio && tc filter add dev eth0 parent 1: protocol ip prio 1 handle 1 fw flowid 1:1

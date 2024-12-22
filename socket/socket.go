@@ -19,17 +19,28 @@ type Socket interface {
 	// Send put message to outbound queue
 	Send(to identity.NodeID, m interface{})
 
+	// Send put message to outbound queue
+	Send2(to identity.NodeID, m interface{})
+
 	// MulticastQuorum sends msg to a set of nodes
 	MulticastQuorum(nodes []identity.NodeID, m interface{})
 
+	// MulticastQuorum2 sends msg to a set of nodes
+	MulticastQuorum2(nodes []identity.NodeID, m interface{})
 	// Broadcast send to all peers
 	Broadcast(m interface{})
 
+	// Broadcast send to all peers
+	Broadcast2(m interface{})
+
 	// 按组广播
-	BroadcastByGroup(block interface{}, blockWithoutPayload interface{})
+	BroadcastByGroup(block interface{}, memberList map[identity.NodeID]struct{})
 
 	// Recv receives a message
 	Recv() interface{}
+
+	// Recv receives a message
+	Recv2() interface{}
 
 	Close()
 
@@ -44,33 +55,37 @@ type Socket interface {
 }
 
 type socket struct {
-	id        identity.NodeID
-	addresses map[identity.NodeID]string
-	nodes     map[identity.NodeID]transport.Transport
-
-	crash bool
-	drop  map[identity.NodeID]bool
-	slow  map[identity.NodeID]int
-	flaky map[identity.NodeID]float64
+	id         identity.NodeID
+	addresses  map[identity.NodeID]string
+	addresses2 map[identity.NodeID]string
+	nodes      map[identity.NodeID]transport.Transport
+	nodes2     map[identity.NodeID]transport.Transport
+	crash      bool
+	drop       map[identity.NodeID]bool
+	slow       map[identity.NodeID]int
+	flaky      map[identity.NodeID]float64
 
 	lock sync.RWMutex // locking map nodes
 }
 
 // NewSocket return Socket interface instance given self NodeID, node list, transport and codec name
-func NewSocket(id identity.NodeID, addrs map[identity.NodeID]string) Socket {
+func NewSocket(id identity.NodeID, addrs map[identity.NodeID]string, addrs2 map[identity.NodeID]string) Socket {
 	socket := &socket{
-		id:        id,
-		addresses: addrs,
-		nodes:     make(map[identity.NodeID]transport.Transport),
-		crash:     false,
-		drop:      make(map[identity.NodeID]bool),
-		slow:      make(map[identity.NodeID]int),
-		flaky:     make(map[identity.NodeID]float64),
+		id:         id,
+		addresses:  addrs,
+		addresses2: addrs2,
+		nodes:      make(map[identity.NodeID]transport.Transport),
+		nodes2:     make(map[identity.NodeID]transport.Transport),
+		crash:      false,
+		drop:       make(map[identity.NodeID]bool),
+		slow:       make(map[identity.NodeID]int),
+		flaky:      make(map[identity.NodeID]float64),
 	}
 
 	socket.nodes[id] = transport.NewTransport(addrs[id])
 	socket.nodes[id].Listen()
-
+	socket.nodes2[id] = transport.NewTransport(addrs2[id])
+	socket.nodes2[id].Listen()
 	return socket
 }
 
@@ -166,6 +181,84 @@ func (s *socket) Recv() interface{} {
 	}
 }
 
+func (s *socket) Send2(to identity.NodeID, m interface{}) {
+	log.Debugf("node2 %s send message %+v to %v", s.id, m, to)
+
+	if s.crash {
+		return
+	}
+
+	if s.drop[to] {
+		return
+	}
+
+	if p, ok := s.flaky[to]; ok && p > 0 {
+		if rand.Float64() < p {
+			return
+		}
+	}
+
+	s.lock.RLock()
+	t, exists := s.nodes2[to]
+	s.lock.RUnlock()
+	if !exists {
+		s.lock.RLock()
+		address2, ok := s.addresses2[to]
+		s.lock.RUnlock()
+		if !ok {
+			log.Errorf("socket does not have address of node %s", to)
+			return
+		}
+		t = transport.NewTransport(address2)
+		err := utils.Retry(t.Dial, 100, time.Duration(50)*time.Millisecond)
+		if err != nil {
+			panic(err)
+		}
+		s.lock.Lock()
+		s.nodes2[to] = t
+		s.lock.Unlock()
+	}
+
+	// add simulated transmission delay
+	if config.GetConfig().Delay != 0 {
+		delay := config.GetConfig().Delay
+		err := config.GetConfig().DErr
+		rand.Seed(time.Now().UnixNano())
+		max := delay + err
+		min := delay - err
+		randDelay := time.Duration(rand.Intn(max-min+1)+min) * time.Millisecond
+		timer := time.NewTimer(randDelay)
+		go func() {
+			<-timer.C
+			t.Send(m)
+		}()
+		return
+
+	}
+	if delay, ok := s.slow[to]; ok && delay > 0 {
+		timer := time.NewTimer(time.Duration(delay) * time.Millisecond)
+		go func() {
+			<-timer.C
+			t.Send(m)
+		}()
+		return
+	}
+	t.Send(m)
+	log.Debugf("[%v] message %v is sent to %v", s.id, m, to)
+}
+
+func (s *socket) Recv2() interface{} {
+	s.lock.RLock()
+	t := s.nodes2[s.id]
+	s.lock.RUnlock()
+	for {
+		m := t.Recv()
+		if !s.crash {
+			return m
+		}
+	}
+}
+
 func (s *socket) MulticastQuorum(nodes []identity.NodeID, m interface{}) {
 	//log.Debugf("node %s multicasting message %+v for %d nodes", s.id, m, quorum)
 	//a := make([]int, len(s.addresses))
@@ -190,6 +283,30 @@ func (s *socket) MulticastQuorum(nodes []identity.NodeID, m interface{}) {
 	}
 }
 
+func (s *socket) MulticastQuorum2(nodes []identity.NodeID, m interface{}) {
+	//log.Debugf("node %s multicasting message %+v for %d nodes", s.id, m, quorum)
+	//a := make([]int, len(s.addresses))
+	//for i := range a {
+	//	a[i] = i + 1
+	//}
+	//a = append(a[:s.id.Node()-1], a[s.id.Node():]...)
+	//rand.Seed(time.Now().UnixNano())
+	//rand.Shuffle(len(a), func(i, j int) { a[i], a[j] = a[j], a[i] })
+	//for i := 0; i < quorum; i++ {
+	//	s.Send(identity.NewNodeID(a[i]), m)
+	//}
+	if nodes == nil {
+		return
+	}
+
+	for _, id := range nodes {
+		if id == s.id {
+			continue
+		}
+		s.Send2(id, m)
+	}
+}
+
 func (s *socket) Broadcast(m interface{}) {
 	//log.Debugf("node %s broadcasting message %+v", s.id, m)
 	for id := range s.addresses {
@@ -201,24 +318,26 @@ func (s *socket) Broadcast(m interface{}) {
 	//log.Debugf("node %s done  broadcasting message %+v", s.id, m)
 }
 
-func (s *socket) BroadcastByGroup(block interface{}, blockWithoutPayload interface{}) {
+func (s *socket) Broadcast2(m interface{}) {
 	//log.Debugf("node %s broadcasting message %+v", s.id, m)
-	i := 0
 	for id := range s.addresses {
 		if id == s.id {
 			continue
 		}
-
-		//给前2个发不带Payload的
-		if i < 2 {
-			log.Debugf("Broadcast without payload to [%v]", id)
-			s.Send(id, blockWithoutPayload)
-		} else {
-			s.Send(id, block)
-		}
-		i++
+		s.Send2(id, m)
 	}
 	//log.Debugf("node %s done  broadcasting message %+v", s.id, m)
+}
+
+func (s *socket) BroadcastByGroup(block interface{}, memberList map[identity.NodeID]struct{}) {
+	seen := make(map[identity.NodeID]struct{})
+	for member := range memberList {
+		seen[member] = struct{}{}
+		if member == s.id {
+			continue
+		}
+		s.Send(member, block)
+	}
 }
 
 func (s *socket) Close() {
