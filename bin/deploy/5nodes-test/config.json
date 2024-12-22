@@ -21,7 +21,7 @@
     "5": "http://172.18.0.6:8070"
   },
   "policy": "majority",
-  "threshold": 1,
+  "threshold": 3,
   "byzNo": 0,
   "strategy": "missing",
   "thrifty": false,
@@ -93,6 +93,6 @@
       "8.130.35.70:9092"
     ],
     "Topic":"mempool",
-    "Enable":false
+    "Enable":true
   }
 }

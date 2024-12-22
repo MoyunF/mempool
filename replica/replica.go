@@ -357,7 +357,7 @@ func (r *Replica) HandleAck(ack blockchain.Ack) {
 }
 
 func (r *Replica) handleResult(result execute.ExecuteResult) {
-	log.Debugf("[%v] received result from %v", r.ID(), result.PropsalId)
+	log.Debugf("handleResult() --- [%v] received result from %v", r.ID(), result.PropsalId)
 	r.eventChan <- result
 }
 
@@ -412,9 +412,11 @@ func (r *Replica) handleQuery(m message.Query) {
 	status := fmt.Sprintf(" Leader:%v\n Ave Real Time:%v\n. Ave. View Time: %vms\nAve. Propose Time: %vms\nAve. Dissemination Time: %vms, slow dissemination time: %v\nAve. Creation Time: %v, a proposal contains %v microblocks\nAve. Vote Time: %vms\nAve. Tx Rate: %v\nAve. MB Rate: %v, an MB contains %v txs\nRedundant microblocks:%v\nTotal microblocks: %v, Remaining microblocks: %v\nTotal missing microblocks: %v\nTotoal proposed microblocks:%v\nAve. hops:%v\nSend Rate: %v Mbps\nRecv Rate: %v Mbps\nTotal txs: %v, Remaining txs: %v\n, StableMb :%v, PendingMb : %v\n%s\n",
 		r.GetCurrentLeader(), aveRealDissTime, aveRoundTime, aveProposeTime, aveDisseminationTime, aveSlowDisseminationTime, aveCreationTime, aveBlockSize, aveVoteTime, aveTxRate, mbRate, r.txNoInMB, r.totalRedundantMBs, r.sm.TotalMB(), r.sm.RemainingMB(), r.missingMicroblocks, r.totalProposedMBs, aveHops, r.SendRate(), r.RecvRate(), r.sm.TotalTx(), r.sm.RemainingTx(), r.sm.StableMB(), r.sm.PendingMB(), r.thrus)
 	m.Reply(message.QueryReply{Info: status})
-	log.Debugf("发送到消息队列中")
-	r.kafkaProducer.SendMessage(status)
-	log.Debugf("发送完成")
+	if config.GetConfig().MessageQueue.Enable {
+		log.Debugf("发送到消息队列中")
+		r.kafkaProducer.SendMessage(status)
+		log.Debugf("发送完成")
+	}
 }
 
 /*

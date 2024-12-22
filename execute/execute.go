@@ -129,26 +129,26 @@ func (e *Executor) ExecuteThread() { //表示是有一个mb被成功执行
 					}
 					requestNode := make([]identity.NodeID, 0)
 
-					log.Debugf("当前需要我执行的mb:%v,没有，向组内节点要", mb.Hash)
+					log.Debugf("ExecuteThread() --- [%v] 当前需要我执行的mb:%x,没有，向组内节点要", e.node.ID(), mb.Hash)
 					//TODO:requestNode不全
 					requestNode = append(requestNode)
 					e.node.MulticastQuorum(requestNode, missStableRequest)
 					break
 				} else {
-					log.Debugf("在执行组中 组：%v", mb.GroupId)
+					log.Debugf("ExecuteThread() --- [%v] 在执行组中 组：%v", e.node.ID(), mb.GroupId)
 					lastmb = mb
 					e.Execute(mb)
 					e.mbPending.mbs = e.mbPending.mbs[1:]
 				}
 			} else {
-				log.Debugf("当前队头任务%v是%v分组负责，无法执行", mb.Hash, mb.GroupId)
+				log.Debugf("ExecuteThread() ---[%v] 当前队头任务%x是%v分组负责，无法执行", e.node.ID(), mb.Hash, mb.GroupId)
 				break
 			}
 		}
 		if lastmb != nil {
 			sig, err := crypto.PrivSign(lastmb.Hash[:], e.node.ID(), nil)
 			if err != nil {
-				log.Debugf("对结果签名失败")
+				log.Debugf("ExecuteThread() ---[%v]对结果签名失败", e.node.ID())
 			} else {
 				fakestate := ""
 				for i := 0; i < 200; i++ {
@@ -160,9 +160,9 @@ func (e *Executor) ExecuteThread() { //表示是有一个mb被成功执行
 					No:     lastmb.CommittedNo,
 				}
 				//广播
-				log.Debugf("区块%v结果执行完成，广播给其他节点", result.Mb)
+				log.Debugf("ExecuteThread() ---[%v] mb%x结果执行完成，广播给其他节点", e.node.ID(), result.Mb)
 				//e.node.MulticastQuorum2(e.gm.NotInGroup(lastmb.GroupId), result)
-				e.node.Broadcast2(result)
+				e.node.Broadcast(result)
 
 				//TODO: 将执行结果发给消息队列
 			}
@@ -201,10 +201,10 @@ func (e *Executor) HandleResult(result *ExecuteResult) {
 		}
 	}
 
-	log.Debugf("收到来自%v的执行成功，执行的mb是%v,目前一共有个%v个执行成功", result.PropsalId, result.Mb, len(e.mbPending.done[result.No]))
+	log.Debugf("HandleResult() --- [%v] 收到来自%v的执行成功，执行的mb是%x,目前一共有个%v个执行成功", e.node.ID(), result.PropsalId, result.Mb, len(e.mbPending.done[result.No]))
 	if high_done_index != 0 {
 		//又可以更新的
-		log.Debugf("执行队列%v以及之前的都被执行成功了", high_done_index)
+		log.Debugf("HandleResult() --- [%v] 执行队列%v以及之前的都被执行成功了", e.node.ID(), high_done_index)
 		e.mbReady(high_done_index)
 	}
 }
@@ -212,7 +212,7 @@ func (e *Executor) HandleResult(result *ExecuteResult) {
 //判断是微块是否已经被执行过
 func (e *Executor) CheckResult(mb *blockchain.MicroBlock) bool {
 	if len(e.mbPending.done[mb.CommittedNo]) >= config.GetConfig().Q {
-		log.Debugf("微块添加到队列之前就被执行了")
+		log.Debugf("HandleResult() ---[%v] 微块 [%x ]添加到队列之前就被执行了", e.node.ID(), mb.Hash)
 		return true
 	}
 	return false
@@ -222,17 +222,16 @@ func (e *Executor) CheckResult(mb *blockchain.MicroBlock) bool {
 func (e *Executor) HandleMiss(mb *blockchain.MicroBlock) {
 	e.lock.Lock()
 	defer e.lock.Unlock()
-	log.Debugf("receive miss mb")
 	found := false
 	for _, mbp := range e.mbPending.mbs {
 		if mbp.Hash == mb.Hash && mbp.IsFake == true {
 			//找到了阻塞块
 			*mbp = *mb //深拷贝
 			found = true
-			log.Debugf("find miss stable %+v", mbp)
+			log.Debugf("HandleResult() --- [%v] 收到被提交但是本地没有存储的mb[%x]，从节点[%v]", e.node.ID(), mb.ProposalID, mbp.Hash)
 		}
 	}
-	log.Debugf("not find miss stable")
+	log.Debugf("HandleResult() --- [%v] 收到了一个丢失的区块mb [%x]从节点[%v]， 但这个小块没有被提交过", e.node.ID(), mb.ProposalID, mb.Hash)
 	if found == true {
 		e.ExecuteThread()
 	}
@@ -248,7 +247,7 @@ func (e *Executor) mbReady(commitNo int) {
 	}
 
 	if end_index == -1 {
-		log.Debugf("收到执行成功，但是对应的微块还没到，当前队列长度%v", len(e.mbPending.mbs))
+		log.Debugf("HandleResult() --- [%v] 收到执行成功，但是对应的微块还没到，当前队列长度%v", e.node.ID(), len(e.mbPending.mbs))
 	}
 
 	for i := 0; i <= end_index; i++ {
@@ -262,7 +261,7 @@ func (e *Executor) mbReady(commitNo int) {
 	// 		e.mbPending.mbs = e.mbPending.mbs[1:]
 	// 	}
 	// }
-	log.Debugf("执行成功，执行了%v个任务,当前队列长度%v", end_index+1, len(e.mbPending.mbs))
+	log.Debugf("HandleResult() ---[%v]根据收到的执行结果，更新了%v个mb的状态,当前队列长度%v", e.node.ID(), end_index+1, len(e.mbPending.mbs))
 	e.ExecuteThread()
 }
 
@@ -313,31 +312,22 @@ func (e *Executor) ExecuteForCoop(mb *blockchain.MicroBlock, befor GroupNum, cur
 
 //区块执行逻辑
 func (e *Executor) rawExecute(mb *blockchain.MicroBlock) {
-
-	log.Debugf("execute mb")
+	log.Debugf("rawExecute() : [%v] execute mb [%x]", e.node.ID(), mb.Hash)
 	for _, transaction := range mb.Txns {
-
-		log.Debugf("len : %v", len(transaction.Command.Value))
-		log.Debugf("body: %v len : %v", transaction.Command.Value, len(transaction.Command.Value))
 		e.state["1"] += 1
 		e.state["2"] += 1
 		e.executedTxsTotal += 1
 		e.executedTxsForQuery += 1
 		e.delayTotal += time.Now().Sub(transaction.Timestamp)
 		e.delayTotalForQuery += time.Now().Sub(transaction.Timestamp)
-		log.Debugf("execute delay = %v ms", time.Now().Sub(transaction.Timestamp).Milliseconds())
-		log.Debugf("totaldelay = %v ms", e.delayTotal.Milliseconds())
-
 	}
 }
 
 //仿真区块执行逻辑
 func (e *Executor) Execute(mb *blockchain.MicroBlock) {
 
-	log.Debugf("execute mb")
-	log.Debugf("fake tx, len : %v", len(mb.Txns[0].Command.Value))
+	log.Debugf("Execute() : [%v] execute mb [%x]", e.node.ID(), mb.Hash)
 	for _, transaction := range mb.Txns {
-
 		//time.Sleep(10 * time.Millisecond)
 		e.state["1"] += 1
 		e.state["2"] += 1
@@ -351,7 +341,7 @@ func (e *Executor) Execute(mb *blockchain.MicroBlock) {
 //更新被其他人执行的状态
 func (e *Executor) updateState(mb *blockchain.MicroBlock) {
 
-	log.Debugf("receive state upload mb")
+	log.Debugf("updateState() : [%v] 更新mb [%x] 后执行的状态", e.node.ID(), mb.Hash)
 	for _, transaction := range mb.Txns {
 		e.executedTxsTotal += 1
 		e.delayTotal += time.Now().Sub(transaction.Timestamp)
@@ -408,6 +398,6 @@ func (e *Executor) ShowQueueStatus() {
 		// if _, ok := e.mbPending.done[mbHash(v.Hash)]; ok {
 		// 	log.Debugf("have receive %v done", len(e.mbPending.done[mbHash(v.Hash)]))
 		// }
-		log.Resultf("mb:%+v, group: %v,done:%v, mb'hash:%v", v.CommittedNo, v.GroupId, len(e.mbPending.done[v.CommittedNo]), v.Hash)
+		log.Resultf("mb:%x, group: %v,done:%v, mb'hash:%v", v.CommittedNo, v.GroupId, len(e.mbPending.done[v.CommittedNo]), v.Hash)
 	}
 }
