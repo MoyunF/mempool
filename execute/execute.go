@@ -89,10 +89,8 @@ func (e *Executor) AddMbToExecute(mb []*blockchain.MicroBlock) {
 
 	if config.GetConfig().BroadcastByGroup == true {
 
-		log.Debugf("有%v个微块添加给执行队列", len(mb))
-
 		e.mbPending.mbs = append(e.mbPending.mbs, mb...)
-		log.Debugf("添加mb到执行队列,队列长度：%v", len(e.mbPending.mbs))
+		log.Debugf("AddMbToExecute() --- 有%v个微块添加给执行队列，添加后的队列长度：%v", len(mb), len(e.mbPending.mbs))
 
 		done_index := -1
 		for index, v := range e.mbPending.mbs {
@@ -102,7 +100,7 @@ func (e *Executor) AddMbToExecute(mb []*blockchain.MicroBlock) {
 			}
 		}
 		if done_index != -1 {
-			log.Debugf("处理一下之前缓存的result")
+			log.Debugf("AddMbToExecute() --- 处理一下之前缓存的result")
 			for i := 0; i <= done_index; i++ {
 				e.updateState(e.mbPending.mbs[0])
 				e.mbPending.mbs = e.mbPending.mbs[1:]
@@ -110,7 +108,7 @@ func (e *Executor) AddMbToExecute(mb []*blockchain.MicroBlock) {
 		}
 	} else {
 		e.mbPending.mbs = append(e.mbPending.mbs, mb...)
-		log.Debugf("添加mb到执行队列,队列长度：%v", len(e.mbPending.mbs))
+		log.Debugf("AddMbToExecute() --- 添加mb到执行队列,队列长度：%v", len(e.mbPending.mbs))
 	}
 	e.ExecuteThread()
 }
@@ -398,6 +396,6 @@ func (e *Executor) ShowQueueStatus() {
 		// if _, ok := e.mbPending.done[mbHash(v.Hash)]; ok {
 		// 	log.Debugf("have receive %v done", len(e.mbPending.done[mbHash(v.Hash)]))
 		// }
-		log.Resultf("mb:%x, group: %v,done:%v, mb'hash:%v", v.CommittedNo, v.GroupId, len(e.mbPending.done[v.CommittedNo]), v.Hash)
+		log.Resultf("mb:%x, group: %v,done:%v, mb'hash:%x", v.CommittedNo, v.GroupId, len(e.mbPending.done[v.CommittedNo]), v.Hash)
 	}
 }

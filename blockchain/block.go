@@ -34,6 +34,7 @@ type Payload struct {
 	MicroblockList []*MicroBlock
 	SigMap         map[crypto.Identifier]map[identity.NodeID]crypto.Signature
 	AckNode        []map[identity.NodeID]struct{} //接收的节点
+	TxNums         []int
 }
 
 type MicroBlock struct {
@@ -64,6 +65,7 @@ type MicroBlock struct {
 type Proposal struct {
 	BlockHeader
 	HashList  []crypto.Identifier
+	TxNums    []int //每个微块中的交易数量，传这个信息是为了方便统计每个提案中有多少个交易
 	GroupList []int
 	AckNode   []map[identity.NodeID]struct{}
 	MbTime    []time.Time
@@ -84,7 +86,7 @@ type rawProposal struct {
 }
 
 // BuildProposal creates a signed proposal
-func BuildProposal(view types.View, qc *QC, prevID crypto.Identifier, payload []crypto.Identifier, groupList []int, ackNodeList []map[identity.NodeID]struct{}, mbTime []time.Time, proposer identity.NodeID) *Proposal {
+func BuildProposal(view types.View, qc *QC, prevID crypto.Identifier, payload []crypto.Identifier, groupList []int, ackNodeList []map[identity.NodeID]struct{}, mbTime []time.Time, proposer identity.NodeID, txNums []int) *Proposal {
 	p := new(Proposal)
 	p.View = view
 	p.Proposer = proposer
@@ -95,14 +97,16 @@ func BuildProposal(view types.View, qc *QC, prevID crypto.Identifier, payload []
 	p.AckNode = ackNodeList
 	p.MbTime = mbTime
 	p.makeID(proposer)
+	p.TxNums = txNums
 	return p
 }
 
-func NewPayload(microblockList []*MicroBlock, sigs map[crypto.Identifier]map[identity.NodeID]crypto.Signature, ackList []map[identity.NodeID]struct{}) *Payload {
+func NewPayload(microblockList []*MicroBlock, sigs map[crypto.Identifier]map[identity.NodeID]crypto.Signature, ackList []map[identity.NodeID]struct{}, txNums []int) *Payload {
 	return &Payload{
 		MicroblockList: microblockList,
 		SigMap:         sigs,
 		AckNode:        ackList,
+		TxNums:         txNums,
 	}
 }
 

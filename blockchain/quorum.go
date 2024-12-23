@@ -25,6 +25,7 @@ type Stable struct {
 	Sender         identity.NodeID   //发送方
 	GroupId        int               //区块所在的组
 	MbCreationTime time.Time         //微块的创建时间
+	TxNums         int               //微块包含的交易数量，边于统计
 }
 
 type Ack struct {

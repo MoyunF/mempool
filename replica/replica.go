@@ -547,7 +547,7 @@ func (r *Replica) observePool() {
 			isbuilt, mb := r.sm.GenerateMb(txs)
 			if isbuilt {
 				//构建微块并且广播
-				log.Debugf("ObservePool() --- [%v] built mb from pool, mb has %v txs, mb's hash[%v]", r.ID(), len(mb.Txns), mb.Hash)
+				log.Debugf("ObservePool() --- [%v] built mb from pool, mb has %v txs, mb's hash[%x]", r.ID(), len(mb.Txns), mb.Hash)
 				r.txNoInMB = len(mb.Txns)
 				mb.Sender = r.ID()
 				r.sm.AddMicroblock(mb)
@@ -567,12 +567,12 @@ func (r *Replica) observePool() {
 						}
 					} else {
 						if config.Configuration.BroadcastByGroup == true {
-							log.Debugf("ObservePool() --- [%v] broadcastByGroup mb's hash:[%v]", r.ID(), mb.Hash)
+							log.Debugf("ObservePool() --- [%v] broadcastByGroup mb's hash:[%x]", r.ID(), mb.Hash)
 							groupId := mb.GroupId
 							groupList := r.gm.GetGroupListByGroupId(groupId)
 							r.BroadcastByGroup(mb, groupList) //3f+1 -> 2f+1 block f hash
 						} else {
-							log.Debugf("ObservePool() --- [%v] broadcastToAll mb's hash:[%v]", r.ID(), mb.Hash)
+							log.Debugf("ObservePool() --- [%v] broadcastToAll mb's hash:[%x]", r.ID(), mb.Hash)
 							r.Broadcast(mb)
 						}
 					}
@@ -902,10 +902,13 @@ func (r *Replica) proposeBlock(view types.View) {
 	//if config.Configuration.MemType == "time" {
 	//	r.waitUntilStable(payload)
 	//}
-	proposal := r.Safety.MakeProposal(view, payload.GenerateHashList(),
+	proposal := r.Safety.MakeProposal(
+		view,
+		payload.GenerateHashList(),
 		payload.GenerateGroupList(),
 		payload.AckNode,
 		payload.GenerateTimeList(),
+		payload.TxNums,
 	)
 	log.Debugf("proposeBlock() --- [%v] make and broadcast a proposal for view %v, containing %v microblocks, %v stable mb left, proposal id [%x]",
 		proposal.Proposer,
