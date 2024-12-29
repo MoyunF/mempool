@@ -283,7 +283,7 @@ func (r *Replica) HandleMicroblock(mb blockchain.MicroBlock) {
 				ack.OutGroup = true
 			}
 			if mb.Sender != r.ID() {
-				log.Debugf("HandleMircoblock() --- [%v] receive a mb, reply ack to [%x], mb's has [%v]", r.ID(), mb.Sender, mb.Hash)
+				log.Debugf("HandleMircoblock() --- [%v] receive a mb, reply ack to [%v], mb's hash [%x]", r.ID(), mb.Sender, mb.Hash)
 				r.Send(mb.Sender, blockchain.MakeAck(r.ID(), mb.Hash))
 			} else {
 				r.HandleAck(*ack)
@@ -487,6 +487,7 @@ func (r *Replica) saveQuery() {
 	r.result = status
 }
 
+//只有通过客户端发送交易时，才会走这个接口的逻辑，否则observerPool
 func (r *Replica) handleTxn(m message.Transaction) {
 	r.startSignal()
 	log.Debugf("[%v] handleTxn ---  recivie tx TxID:[%v] ForwardNode:[%v] ", r.ID(), m.ID, m.NodeID)
@@ -512,6 +513,7 @@ func (r *Replica) handleTxn(m message.Transaction) {
 				if config.Configuration.BroadcastByGroup == true {
 					groupId := mb.GroupId
 					groupList := r.gm.GetGroupListByGroupId(groupId)
+					log.Debugf("handleTxn() ---[%v] brocadcast mb [%x] to group [%v], group member list [%+v]", r.Node, mb.Hash, groupId, groupList)
 					r.BroadcastByGroup(mb, groupList) //N -> 2f+1
 				} else {
 					r.Broadcast(mb)
@@ -567,10 +569,10 @@ func (r *Replica) observePool() {
 						}
 					} else {
 						if config.Configuration.BroadcastByGroup == true {
-							log.Debugf("ObservePool() --- [%v] broadcastByGroup mb's hash:[%x]", r.ID(), mb.Hash)
 							groupId := mb.GroupId
 							groupList := r.gm.GetGroupListByGroupId(groupId)
-							r.BroadcastByGroup(mb, groupList) //3f+1 -> 2f+1 block f hash
+							r.BroadcastByGroup(mb, groupList)
+							log.Debugf("ObservePool() ---[%v] brocadcast mb [%x] to group [%v], group member list [%+v]", r.ID(), mb.Hash, groupId, groupList)
 						} else {
 							log.Debugf("ObservePool() --- [%v] broadcastToAll mb's hash:[%x]", r.ID(), mb.Hash)
 							r.Broadcast(mb)
