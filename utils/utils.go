@@ -68,6 +68,31 @@ func BitmapToNodes(bm bitmap.Bitmap) []identity.NodeID {
 	return nodes
 }
 
+// 生成唯一随机数组的函数 生成t个数，数的大小从1到N
+func GenerateUniqueRandomArray(t, minValue, N int) ([]int, error) {
+	// 参数检查
+	if t > (N - minValue + 1) {
+		return nil, fmt.Errorf("无法生成长度为 %d 的唯一随机数组，因为范围 [%d, %d] 的元素不足", t, minValue, N)
+	}
+
+	// 初始化随机数生成器
+	rand.Seed(time.Now().UnixNano())
+
+	// 使用一个 map 来避免重复
+	used := make(map[int]struct{})
+	result := make([]int, 0, t)
+
+	for len(result) < t {
+		num := rand.Intn(N-minValue+1) + minValue // 生成范围 [minValue, N] 的随机数
+		if _, exists := used[num]; !exists {
+			used[num] = struct{}{}
+			result = append(result, num)
+		}
+	}
+
+	return result, nil
+}
+
 //n个中选出f个
 func RandomPick(n int, f int) []int {
 

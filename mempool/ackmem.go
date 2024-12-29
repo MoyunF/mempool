@@ -226,6 +226,10 @@ func (am *AckMem) AddAck(ack *blockchain.Ack) {
 		}
 		if target.ackNum >= am.threshhold {
 			if _, exists := am.stableMBs[target.microblock.Hash]; !exists {
+				ackNodeList := make([]identity.NodeID, 0)
+				for node := range target.ackMap {
+					ackNodeList = append(ackNodeList, node)
+				}
 				am.stableMicroblocks.PushBack(target.microblock)
 				am.stableMBs[target.microblock.Hash] = struct{}{}
 				am.TotalStableMbs++
@@ -240,6 +244,7 @@ func (am *AckMem) AddAck(ack *blockchain.Ack) {
 					GroupId:        target.microblock.GroupId,
 					MbCreationTime: target.microblock.Timestamp,
 					TxNums:         len(target.microblock.Txns),
+					AckNodeList:    ackNodeList,
 				}
 				am.StableBuffer[target.microblock.Hash] = stable //保存stable信息
 				copy(stable.AckInGroup, target.AckInGroup)
@@ -336,21 +341,26 @@ func (am *AckMem) GeneratePayload() *blockchain.Payload {
 		}
 	}
 
-	//重排stable
-	items := make([]*blockchain.MicroBlock, 0, am.stableMicroblocks.Len())
-	for e := am.stableMicroblocks.Front(); e != nil; e = e.Next() {
-		items = append(items, e.Value.(*blockchain.MicroBlock))
-	}
+	if config.Configuration.BroadcastByGroup == true {
+		//采用分组广播时才能使用快速重排算法，这种算法在当前情况下等于最短哈密顿路径的最优解
+		//重排stable
+		items := make([]*blockchain.MicroBlock, 0, am.stableMicroblocks.Len())
+		for e := am.stableMicroblocks.Front(); e != nil; e = e.Next() {
+			items = append(items, e.Value.(*blockchain.MicroBlock))
+		}
 
-	// 使用切片的排序功能对元素进行排序
-	sort.Slice(items, func(i, j int) bool {
-		return items[i].GroupId < items[j].GroupId
-	})
+		// 使用切片的排序功能对元素进行排序
+		sort.Slice(items, func(i, j int) bool {
+			return items[i].GroupId < items[j].GroupId
+		})
 
-	// 将排序后的元素重新放回 list.List
-	am.stableMicroblocks.Init()
-	for _, item := range items {
-		am.stableMicroblocks.PushBack(item)
+		// 将排序后的元素重新放回 list.List
+		am.stableMicroblocks.Init()
+		for _, item := range items {
+			am.stableMicroblocks.PushBack(item)
+		}
+	} else if config.Configuration.BroadcastBySample == true {
+		//TODO:随机采样，采用不同的算法（必做）
 	}
 
 	sigMap := make(map[crypto.Identifier]map[identity.NodeID]crypto.Signature, 0)
@@ -358,9 +368,6 @@ func (am *AckMem) GeneratePayload() *blockchain.Payload {
 	if am.stableMicroblocks.Len() >= am.bsize {
 		batchSize = am.bsize
 	} else {
-		// if config.GetConfig().BroadcastByGroup == true {
-		// 	time.Sleep(200 * time.Millisecond)
-		// }
 		batchSize = am.stableMicroblocks.Len()
 	}
 	// for {

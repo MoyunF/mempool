@@ -573,6 +573,19 @@ func (r *Replica) observePool() {
 							groupList := r.gm.GetGroupListByGroupId(groupId)
 							r.BroadcastByGroup(mb, groupList)
 							log.Debugf("ObservePool() ---[%v] brocadcast mb [%x] to group [%v], group member list [%+v]", r.ID(), mb.Hash, groupId, groupList)
+						} else if config.Configuration.BroadcastBySample == true {
+							threshold := int(config.Configuration.Threshold)
+							n := config.Configuration.N()
+							//生成threshold个整数，每个数从1到n
+							nodeNumber, _ := utils.GenerateUniqueRandomArray(threshold, 1, n)
+							targetMember := make(map[identity.NodeID]struct{})
+							targetMember[r.ID()] = struct{}{}
+							for _, v := range nodeNumber {
+								targetMember[identity.NewNodeID(v)] = struct{}{}
+							}
+							mb.GenerateNodeList = targetMember
+							log.Debugf("ObservePool() ---[%v] brocadcast mb [%x] to sample [%v]", r.ID(), mb.Hash, targetMember)
+							r.BroadcastByGroup(mb, targetMember)
 						} else {
 							log.Debugf("ObservePool() --- [%v] broadcastToAll mb's hash:[%x]", r.ID(), mb.Hash)
 							r.Broadcast(mb)
@@ -888,11 +901,6 @@ func (r *Replica) processAcks(ack *blockchain.Ack) {
 		// 		r.ID(), ack.MicroblockID, ack.Receiver)
 		// }
 	}
-}
-
-//处理其他节点的stable消息
-func (r *Replica) proceseStable(stable blockchain.Stable) {
-
 }
 
 func (r *Replica) proposeBlock(view types.View) {

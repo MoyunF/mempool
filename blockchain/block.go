@@ -52,6 +52,9 @@ type MicroBlock struct {
 	Hops            int
 	CommittedNo     int
 
+	//完全随机
+	GenerateNodeList map[identity.NodeID]struct{}
+
 	CreateTimeStamp      time.Time //小块被创建的时间
 	SendTimeStamp        time.Time //小块被发送的时间
 	ReceiveTimeStamp     time.Time //小块被收到的时间

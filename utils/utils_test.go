@@ -2,12 +2,13 @@ package utils
 
 import (
 	"fmt"
-	"github.com/gitferry/bamboo/config"
-	"github.com/gitferry/bamboo/identity"
-	"github.com/stretchr/testify/require"
 	"math/rand"
 	"strconv"
 	"testing"
+
+	"github.com/gitferry/bamboo/config"
+	"github.com/gitferry/bamboo/identity"
+	"github.com/stretchr/testify/require"
 )
 
 func TestPickRandomNodes(t *testing.T) {
@@ -42,6 +43,13 @@ func TestRandomPick(t *testing.T) {
 	pick := RandomPick(n, f)
 	require.Equal(t, 34, len(pick))
 	fmt.Printf("%v", RandomPick(n, f))
+}
+
+func TestGenerateUniqueRandomArray(t *testing.T) {
+	result, _ := generateUniqueRandomArray(1, 100, 200)
+	for _, v := range result {
+		fmt.Println(v)
+	}
 }
 
 func TestZipf(t *testing.T) {
