@@ -176,9 +176,10 @@ func (hs *HotStuff) MakeProposal(
 	groupList []int,
 	ackNodeList []map[identity.NodeID]struct{},
 	mbTime []time.Time,
+	txNums []int,
 ) *blockchain.Proposal {
 	qc := hs.forkChoice()
-	proposal := blockchain.BuildProposal(view, qc, qc.BlockID, payload, groupList, ackNodeList, mbTime, hs.ID())
+	proposal := blockchain.BuildProposal(view, qc, qc.BlockID, payload, groupList, ackNodeList, mbTime, hs.ID(), txNums)
 	return proposal
 }
 

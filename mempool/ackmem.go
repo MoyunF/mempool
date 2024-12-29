@@ -168,7 +168,7 @@ func (am *AckMem) AddMicroblock(mb *blockchain.MicroBlock) error {
 		pm.AckOutGroup = append(pm.AckOutGroup, mb.Sender)
 	}
 	am.microblockMap[mb.Hash] = mb
-	log.Debugf("收到了mb：%x ,mb's fake : %v", mb.Hash, mb.IsFake)
+	log.Debugf("AddMicroblock() --- 收到了mb：%x ,mb's fake : %v", mb.Hash, mb.IsFake)
 
 	//check if there are some acks of this microblock arrived before
 	buffer, received := am.ackBuffer[mb.Hash]
@@ -226,6 +226,10 @@ func (am *AckMem) AddAck(ack *blockchain.Ack) {
 		}
 		if target.ackNum >= am.threshhold {
 			if _, exists := am.stableMBs[target.microblock.Hash]; !exists {
+				ackNodeList := make([]identity.NodeID, 0)
+				for node := range target.ackMap {
+					ackNodeList = append(ackNodeList, node)
+				}
 				am.stableMicroblocks.PushBack(target.microblock)
 				am.stableMBs[target.microblock.Hash] = struct{}{}
 				am.TotalStableMbs++
@@ -239,6 +243,8 @@ func (am *AckMem) AddAck(ack *blockchain.Ack) {
 					Sender:         am.node.ID(),
 					GroupId:        target.microblock.GroupId,
 					MbCreationTime: target.microblock.Timestamp,
+					TxNums:         len(target.microblock.Txns),
+					AckNodeList:    ackNodeList,
 				}
 				am.StableBuffer[target.microblock.Hash] = stable //保存stable信息
 				copy(stable.AckInGroup, target.AckInGroup)
@@ -290,11 +296,21 @@ func (am *AckMem) AddStable(stable *blockchain.Stable) {
 	if !exist {
 		//收到了stable但是没有收到微块
 		log.Debugf("AddStable() --- [%v]receive stable, but don't have mb, mb's hash[%x]", am.node.ID(), stable.MicroblockID)
+
+		fakeTxns := make([]*message.Transaction, 0, stable.TxNums)
+		for i := 0; i < stable.TxNums; i++ {
+			tx := &message.Transaction{
+				Timestamp: time.Now(),
+			}
+			fakeTxns = append(fakeTxns, tx)
+		}
+
 		mb := &blockchain.MicroBlock{
 			IsFake:    true,
 			Hash:      stable.MicroblockID,
 			GroupId:   stable.GroupId,
 			Timestamp: stable.MbCreationTime,
+			Txns:      fakeTxns,
 		}
 		am.microblockMap[mb.Hash] = mb
 		am.stableMicroblocks.PushBack(mb)
@@ -325,21 +341,26 @@ func (am *AckMem) GeneratePayload() *blockchain.Payload {
 		}
 	}
 
-	//重排stable
-	items := make([]*blockchain.MicroBlock, 0, am.stableMicroblocks.Len())
-	for e := am.stableMicroblocks.Front(); e != nil; e = e.Next() {
-		items = append(items, e.Value.(*blockchain.MicroBlock))
-	}
+	if config.Configuration.BroadcastByGroup == true {
+		//采用分组广播时才能使用快速重排算法，这种算法在当前情况下等于最短哈密顿路径的最优解
+		//重排stable
+		items := make([]*blockchain.MicroBlock, 0, am.stableMicroblocks.Len())
+		for e := am.stableMicroblocks.Front(); e != nil; e = e.Next() {
+			items = append(items, e.Value.(*blockchain.MicroBlock))
+		}
 
-	// 使用切片的排序功能对元素进行排序
-	sort.Slice(items, func(i, j int) bool {
-		return items[i].GroupId < items[j].GroupId
-	})
+		// 使用切片的排序功能对元素进行排序
+		sort.Slice(items, func(i, j int) bool {
+			return items[i].GroupId < items[j].GroupId
+		})
 
-	// 将排序后的元素重新放回 list.List
-	am.stableMicroblocks.Init()
-	for _, item := range items {
-		am.stableMicroblocks.PushBack(item)
+		// 将排序后的元素重新放回 list.List
+		am.stableMicroblocks.Init()
+		for _, item := range items {
+			am.stableMicroblocks.PushBack(item)
+		}
+	} else if config.Configuration.BroadcastBySample == true {
+		//TODO:随机采样，采用不同的算法（必做）
 	}
 
 	sigMap := make(map[crypto.Identifier]map[identity.NodeID]crypto.Signature, 0)
@@ -347,9 +368,6 @@ func (am *AckMem) GeneratePayload() *blockchain.Payload {
 	if am.stableMicroblocks.Len() >= am.bsize {
 		batchSize = am.bsize
 	} else {
-		// if config.GetConfig().BroadcastByGroup == true {
-		// 	time.Sleep(200 * time.Millisecond)
-		// }
 		batchSize = am.stableMicroblocks.Len()
 	}
 	// for {
@@ -360,7 +378,7 @@ func (am *AckMem) GeneratePayload() *blockchain.Payload {
 	// }
 	microblockList := make([]*blockchain.MicroBlock, 0)
 	ackNodeList := make([]map[identity.NodeID]struct{}, 0)
-
+	txNums := make([]int, 0)
 	for i := 0; i < batchSize; i++ {
 		mb := am.front()
 		if mb == nil {
@@ -369,7 +387,7 @@ func (am *AckMem) GeneratePayload() *blockchain.Payload {
 		//log.Debugf("GeneratePayload() --- [%v]  mb [%x] is deleted from mempool when proposing", am.node.ID(), mb.Hash)
 		microblockList = append(microblockList, mb)
 		ackNodeList = append(ackNodeList, am.GenerateAckNodeList(mb))
-
+		txNums = append(txNums, len(mb.Txns))
 		sigs := make(map[identity.NodeID]crypto.Signature, 0)
 		count := 0
 		for id, sig := range am.ackBuffer[mb.Hash] {
@@ -382,7 +400,7 @@ func (am *AckMem) GeneratePayload() *blockchain.Payload {
 		sigMap[mb.Hash] = sigs
 	}
 	//log.Debugf("GeneratePayload() --- [%v]  fetch %v mb as payload", am.node.ID(), batchSize)
-	return blockchain.NewPayload(microblockList, sigMap, ackNodeList)
+	return blockchain.NewPayload(microblockList, sigMap, ackNodeList, txNums)
 }
 
 func (am *AckMem) GenerateAckNodeList(mb *blockchain.MicroBlock) map[identity.NodeID]struct{} {
@@ -499,12 +517,22 @@ func (am *AckMem) FetchMB(p *blockchain.Proposal) *blockchain.PendingBlock {
 			log.Debugf("FetchMB() --- [%v]Porposal中的mb [%x]，在本地找到", am.node.ID(), id)
 			existingBlocks = append(existingBlocks, mb)
 		} else {
-			log.Debugf("FetchMB() --- [%v]Porposal中的mb [%x]，在本地无法找到", am.node.ID(), id)
+			log.Debugf("FetchMB() --- [%v]Porposal中的mb [%x]，在本地无法找到, 构建一个假块用来给执行器用", am.node.ID(), id)
+			//在这里生成假块的是否，需要增加一些假的交易信息，这是为了方便统计已经共识的交易信息
+			//否则假块中没有交易，共识的交易数量会缺少这部分交易
+			fakeTxns := make([]*message.Transaction, 0, p.TxNums[index])
+			for i := 0; i < p.TxNums[index]; i++ {
+				tx := &message.Transaction{
+					Timestamp: time.Now(),
+				}
+				fakeTxns = append(fakeTxns, tx)
+			}
 			mb := &blockchain.MicroBlock{
 				IsFake:    true,
 				Hash:      id,
 				GroupId:   p.GroupList[index],
 				Timestamp: p.MbTime[index],
+				Txns:      fakeTxns,
 			}
 			//存疑，是否应该加入到missing中
 			existingBlocks = append(existingBlocks, mb)

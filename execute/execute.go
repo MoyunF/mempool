@@ -89,10 +89,8 @@ func (e *Executor) AddMbToExecute(mb []*blockchain.MicroBlock) {
 
 	if config.GetConfig().BroadcastByGroup == true {
 
-		log.Debugf("有%v个微块添加给执行队列", len(mb))
-
 		e.mbPending.mbs = append(e.mbPending.mbs, mb...)
-		log.Debugf("添加mb到执行队列,队列长度：%v", len(e.mbPending.mbs))
+		log.Debugf("AddMbToExecute() --- 有%v个微块添加给执行队列，添加后的队列长度：%v", len(mb), len(e.mbPending.mbs))
 
 		done_index := -1
 		for index, v := range e.mbPending.mbs {
@@ -102,7 +100,7 @@ func (e *Executor) AddMbToExecute(mb []*blockchain.MicroBlock) {
 			}
 		}
 		if done_index != -1 {
-			log.Debugf("处理一下之前缓存的result")
+			log.Debugf("AddMbToExecute() --- 处理一下之前缓存的result")
 			for i := 0; i <= done_index; i++ {
 				e.updateState(e.mbPending.mbs[0])
 				e.mbPending.mbs = e.mbPending.mbs[1:]
@@ -110,16 +108,16 @@ func (e *Executor) AddMbToExecute(mb []*blockchain.MicroBlock) {
 		}
 	} else {
 		e.mbPending.mbs = append(e.mbPending.mbs, mb...)
-		log.Debugf("添加mb到执行队列,队列长度：%v", len(e.mbPending.mbs))
+		log.Debugf("AddMbToExecute() --- 添加mb到执行队列,队列长度：%v", len(e.mbPending.mbs))
 	}
 	e.ExecuteThread()
 }
 
 func (e *Executor) ExecuteThread() { //表示是有一个mb被成功执行
-	var lastmb *blockchain.MicroBlock = nil
-	e.ShowQueueStatus()
+	e.ShowQueueStatus_Sample()
 	if config.GetConfig().BroadcastByGroup == true {
-		for _, mb := range e.mbPending.mbs {
+		successNum := 0
+		for curIndex, mb := range e.mbPending.mbs {
 			if e.gm.IsInMyGroup(mb.GroupId) {
 				if mb.IsFake == true {
 					//请求重传
@@ -128,45 +126,54 @@ func (e *Executor) ExecuteThread() { //表示是有一个mb被成功执行
 						MbID:        mb.Hash,
 					}
 					requestNode := make([]identity.NodeID, 0)
-
-					log.Debugf("ExecuteThread() --- [%v] 当前需要我执行的mb:%x,没有，向组内节点要", e.node.ID(), mb.Hash)
+					log.Debugf("ExecuteThread() --- [%v] 需要执行mb:%x,但是缺少明文,向组内节点要,执行组:%v", e.node.ID(), mb.Hash, mb.GroupId)
 					//TODO:requestNode不全
 					requestNode = append(requestNode)
 					e.node.MulticastQuorum(requestNode, missStableRequest)
 					break
 				} else {
-					log.Debugf("ExecuteThread() --- [%v] 在执行组中 组：%v", e.node.ID(), mb.GroupId)
-					lastmb = mb
+					log.Debugf("ExecuteThread() --- [%v] 需要执行mb:%x,包含明文,开始执行,执行组:%v", e.node.ID(), mb.Hash, mb.GroupId)
 					e.Execute(mb)
-					e.mbPending.mbs = e.mbPending.mbs[1:]
+					//广播
+					executeResult := e.generateExecuteResult(mb)
+					e.stateBroadcastByGroup(curIndex, executeResult)
+					successNum += 1
 				}
 			} else {
-				log.Debugf("ExecuteThread() ---[%v] 当前队头任务%x是%v分组负责，无法执行", e.node.ID(), mb.Hash, mb.GroupId)
+				log.Debugf("ExecuteThread() ---[%v] 当前队头任务%x是%v分组负责，无需执行", e.node.ID(), mb.Hash, mb.GroupId)
 				break
 			}
 		}
-		if lastmb != nil {
-			sig, err := crypto.PrivSign(lastmb.Hash[:], e.node.ID(), nil)
-			if err != nil {
-				log.Debugf("ExecuteThread() ---[%v]对结果签名失败", e.node.ID())
+		e.mbPending.mbs = e.mbPending.mbs[successNum:]
+		log.Debugf("ExecuteThread() --- [%v] 共执行了%v个微块，当前执行队列长度", e.node.ID(), successNum, len(e.mbPending.mbs))
+	} else if config.GetConfig().BroadcastBySample == true {
+		//采样模式
+		successNum := 0
+		for curIndex, mb := range e.mbPending.mbs {
+			if mb.IsFake == true {
+				if _, ok := mb.GenerateNodeList[e.node.ID()]; ok {
+					//如果需要我执行，但是我没有，我会要一下缺失块
+					missStableRequest := message.MissingStableMBRequest{
+						RequesterID: e.node.ID(), //本人id
+						MbID:        mb.Hash,
+					}
+					log.Debugf("ExecuteThread() --- [%v] 采样模式，需要执行mb:%x,但是缺少明文,向存储明文的节点要，生成mb的节点列表:%+v", e.node.ID(), mb.Hash, mb.GenerateNodeList)
+					e.node.BroadcastByGroup(missStableRequest, mb.GenerateNodeList)
+					break
+				} else {
+					log.Debugf("ExecuteThread() --- [%v] 采样模式，mb:%x 的明文不是由当前节点存储的,生成mb的节点列表:%+v", e.node.ID(), mb.Hash, mb.GenerateNodeList)
+				}
 			} else {
-				fakestate := ""
-				for i := 0; i < 200; i++ {
-					fakestate += "0x112312912480:32"
-				}
-				result := &ExecuteResult{PropsalId: e.node.ID(), Sig: sig,
-					Mb:     mbHash(lastmb.Hash),
-					Result: fakestate,
-					No:     lastmb.CommittedNo,
-				}
+				log.Debugf("ExecuteThread() --- [%v] 采样模式，mb:%x,包含明文,开始执行,生成mb的节点列表:%+v", e.node.ID(), mb.Hash, mb.GenerateNodeList)
+				e.Execute(mb)
 				//广播
-				log.Debugf("ExecuteThread() ---[%v] mb%x结果执行完成，广播给其他节点", e.node.ID(), result.Mb)
-				//e.node.MulticastQuorum2(e.gm.NotInGroup(lastmb.GroupId), result)
-				e.node.Broadcast(result)
-
-				//TODO: 将执行结果发给消息队列
+				executeResult := e.generateExecuteResult(mb)
+				e.stateBroadcastBySample(curIndex, executeResult)
+				successNum += 1
 			}
 		}
+		e.mbPending.mbs = e.mbPending.mbs[successNum:]
+		log.Debugf("ExecuteThread() --- [%v] 采样模式, 共执行了%v个微块，当前执行队列长度", e.node.ID(), successNum, len(e.mbPending.mbs))
 	} else {
 		//不分组
 		for _, mb := range e.mbPending.mbs {
@@ -328,7 +335,6 @@ func (e *Executor) Execute(mb *blockchain.MicroBlock) {
 
 	log.Debugf("Execute() : [%v] execute mb [%x]", e.node.ID(), mb.Hash)
 	for _, transaction := range mb.Txns {
-		//time.Sleep(10 * time.Millisecond)
 		e.state["1"] += 1
 		e.state["2"] += 1
 		e.executedTxsTotal += 1
@@ -398,6 +404,111 @@ func (e *Executor) ShowQueueStatus() {
 		// if _, ok := e.mbPending.done[mbHash(v.Hash)]; ok {
 		// 	log.Debugf("have receive %v done", len(e.mbPending.done[mbHash(v.Hash)]))
 		// }
-		log.Resultf("mb:%x, group: %v,done:%v, mb'hash:%v", v.CommittedNo, v.GroupId, len(e.mbPending.done[v.CommittedNo]), v.Hash)
+		log.Resultf("mb:%v, group: %v,done:%v, mb'hash:%x", v.CommittedNo, v.GroupId, len(e.mbPending.done[v.CommittedNo]), v.Hash)
 	}
+}
+
+func (e *Executor) ShowQueueStatus_Sample() {
+	// e.lock.Lock()
+	// defer e.lock.Unlock()
+
+	i := 1
+	for _, v := range e.mbPending.mbs {
+		// log.Debugf("is fake:%v", v.IsFake)
+		// log.Debugf("group:%v", v.GroupId)
+		// log.Debugf("is In my groop:%v", e.gm.IsInMyGroup(v.GroupId))
+		// if _, ok := e.mbPending.done[mbHash(v.Hash)]; ok {
+		// 	log.Debugf("have receive %v done", len(e.mbPending.done[mbHash(v.Hash)]))
+		// }
+		log.Resultf("当前执行队列第%v个: mb:%v, GenerateList: %+v,done:%v, mb'hash:%x", i, v.CommittedNo, v.GenerateNodeList, len(e.mbPending.done[v.CommittedNo]), v.Hash)
+		i++
+		if i >= 10 {
+			break
+		}
+	}
+}
+
+func (e *Executor) generateExecuteResult(mb *blockchain.MicroBlock) *ExecuteResult {
+	sig, err := crypto.PrivSign(mb.Hash[:], e.node.ID(), nil)
+	if err != nil {
+		log.Debugf("generateExecuteResult() ---[%v]对结果签名失败", e.node.ID())
+	} else {
+		fakestate := ""
+		for i := 0; i < 200; i++ {
+			fakestate += "0x112312912480:32"
+		}
+		result := &ExecuteResult{
+			PropsalId: e.node.ID(),
+			Sig:       sig,
+			Mb:        mbHash(mb.Hash),
+			Result:    fakestate,
+			No:        mb.CommittedNo,
+			buildTime: time.Now(),
+		}
+		//广播
+		log.Debugf("generateExecuteResult() ---[%v] mb [%x]执行后的结果已经获取", e.node.ID(), mb.Hash)
+		return result
+	}
+	log.Debugf("generateExecuteResult() ---[%v] mb [%x]执行后的结果获取失败", e.node.ID(), mb.Hash)
+	return &ExecuteResult{}
+}
+
+//采用分组方案时，执行状态广播操作，根据mb的存储情况，判断需要向哪些节点广播执行结果
+func (e *Executor) stateBroadcastByGroup(curIndex int, executeResult *ExecuteResult) {
+	if curIndex != len(e.mbPending.mbs)-1 {
+		targetMember := make(map[identity.NodeID]struct{})
+		//不是最后一个微块
+		currentMb := e.mbPending.mbs[curIndex]
+		nextMb := e.mbPending.mbs[curIndex+1]
+		currentGroup := currentMb.GroupId
+		nextGroup := nextMb.GroupId
+		currentMemberList := e.gm.GetGroupListByGroupId(currentGroup)
+		nextMemberList := e.gm.GetGroupListByGroupId(nextGroup)
+
+		for member := range nextMemberList {
+			//log.Debugf("stateBroadcastByGroup() --- Checking member: %+v in currentMemberList: %+v", member, currentMemberList)
+			if _, ok := currentMemberList[member]; !ok {
+				//如果下一个微块中的节点，没有存储当前区块，则需要把结果广播给它
+				targetMember[member] = struct{}{}
+				log.Debugf("stateBroadcastByGroup() --- [%v]，精细化广播执行结果，目标节点[%v],当前mb:%x", e.node.ID().Node(), member, currentMb.Hash)
+			}
+		}
+		log.Debugf("stateBroadcastByGroup() --- [%v]，精细化广播执行结果，目标节点列表[%+v],当前mb:%x", e.node.ID().Node(), targetMember, currentMb.Hash)
+		e.node.BroadcastByGroup(executeResult, targetMember)
+	} else {
+		currentMb := e.mbPending.mbs[curIndex]
+		//如果是队列中最后一个块，广播
+		log.Debugf("stateBroadcastByGroup() --- [%v]，当前是mb是队列中的最后一个块，因此广播给全员,当前mb:%x", e.node.ID().Node(), currentMb.Hash)
+		e.node.Broadcast(executeResult)
+	}
+
+}
+
+//采用采样方案时，执行状态广播操作，根据mb的存储情况，判断需要向哪些节点广播执行结果
+func (e *Executor) stateBroadcastBySample(curIndex int, executeResult *ExecuteResult) {
+	if curIndex != len(e.mbPending.mbs)-1 {
+		targetMember := make(map[identity.NodeID]struct{})
+		//不是最后一个微块
+		currentMb := e.mbPending.mbs[curIndex]
+		nextMb := e.mbPending.mbs[curIndex+1]
+		currentMemberList := currentMb.GenerateNodeList
+		nextMemberList := nextMb.GenerateNodeList
+
+		for member := range nextMemberList {
+			log.Debugf("stateBroadcastBySample() --- Checking member: %+v in currentMemberList: %+v", member, currentMemberList)
+			if _, ok := currentMemberList[member]; !ok {
+				//如果下一个微块中的节点，没有存储当前区块，则需要把结果广播给它
+				targetMember[member] = struct{}{}
+				log.Debugf("stateBroadcastBySample() --- [%v]，精细化广播执行结果，目标节点[%v],当前mb:%x", e.node.ID().Node(), member, currentMb.Hash)
+			}
+		}
+		log.Debugf("stateBroadcastBySample() --- [%v]，精细化广播执行结果，目标节点列表[%+v],当前mb:%x", e.node.ID().Node(), targetMember, currentMb.Hash)
+		e.node.BroadcastByGroup(executeResult, targetMember)
+	} else {
+		currentMb := e.mbPending.mbs[curIndex]
+		//如果是队列中最后一个块，广播
+		log.Debugf("stateBroadcastBySample() --- [%v]，当前是mb是队列中的最后一个块，因此广播给全员,当前mb:%x", e.node.ID().Node(), currentMb.Hash)
+		e.node.Broadcast(executeResult)
+	}
+
 }

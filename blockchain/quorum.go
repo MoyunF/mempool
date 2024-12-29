@@ -21,10 +21,12 @@ type Vote struct {
 type Stable struct {
 	AckInGroup     []identity.NodeID //组内ack
 	AckOutGroup    []identity.NodeID //组外ack
+	AckNodeList    []identity.NodeID
 	MicroblockID   crypto.Identifier //微块hash
 	Sender         identity.NodeID   //发送方
 	GroupId        int               //区块所在的组
 	MbCreationTime time.Time         //微块的创建时间
+	TxNums         int               //微块包含的交易数量，边于统计
 }
 
 type Ack struct {

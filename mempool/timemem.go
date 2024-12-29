@@ -112,7 +112,7 @@ func (tm *Timemem) GeneratePayload() *blockchain.Payload {
 		}
 		microblockList = append(microblockList, mb.(*blockchain.MicroBlock))
 	}
-	return blockchain.NewPayload(microblockList, nil, nil)
+	return blockchain.NewPayload(microblockList, nil, nil, nil)
 }
 
 // CheckExistence checks if the referred microblocks in the proposal exists
