@@ -193,7 +193,6 @@ func NewReplica(id identity.NodeID, alg string, isByz bool) *Replica {
 	default:
 		r.Safety = hotstuff.NewHotStuff(r.Node, r.pm, r.Election, r.committedBlocks, r.forkedBlocks)
 	}
-	go r.saveResult()
 	return r
 }
 
@@ -420,6 +419,8 @@ func (r *Replica) handleQuery(m message.Query) {
 }
 
 /*
+	每个1s打一下TPS，统计最高值
+	时延：计算出每个小块的时延
 	区块执行效率统计：
 		1. 执行全部区块所用的时间
 		2. 交易执行数量随时间的变化曲线 间隔1s
@@ -1020,37 +1021,51 @@ func (r *Replica) ListenCommittedBlocks() {
 	}
 }
 
-//每隔1s保存一次结果
-func (r *Replica) saveResult() {
-	ticker := time.NewTicker(1 * time.Second)
-	done := make(chan bool)
+//用来监控节点的各项指标 duration：持续的时间  interval ： 每隔多少ms进行一次结果采样
 
-	go func() {
-		for {
-			select {
-			case <-done:
-				return
-			case <-ticker.C:
-				r.saveQuery()
-			}
+func (r *Replica) startMonitor(duration time.Duration, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	endTime := time.Now().Add(duration) // 计算结束时间
+	log.Infof("startMonitor() --- Monitoring started. Duration: %v s, Interval: %v s", duration.Seconds(), interval.Seconds())
+
+	for now := time.Now(); now.Before(endTime); now = time.Now() {
+		select {
+		case <-ticker.C:
+			//监控指标
 		}
-	}()
+	}
 
-	//持续监听ns
-	time.Sleep(time.Duration(config.GetConfig().Time) * time.Second)
-	ticker.Stop()
-	done <- true
-	log.Resultf("nodesize:%v,byz:%v,group:%v,cold:%v,mbsize:%v,txsize:%v,txsInMb:%v,TxPerSecond:%v",
-		config.GetConfig().N(),
-		config.GetConfig().ByzNo,
-		config.GetConfig().BroadcastByGroup,
-		config.GetConfig().Benchmark.Cold,
-		config.GetConfig().MSize,
-		config.GetConfig().PayloadSize,
-		config.GetConfig().MSize/config.GetConfig().PayloadSize,
-		config.GetConfig().TxPerSecond,
-	)
-	log.Resultf(r.result)
+	log.Infof("startMonitor() --- Monitoring finished")
+}
+
+var collectMu sync.Mutex
+
+/**
+1. 每秒stable的微块数
+2. 每个微块被stable的用时 k，v
+3. 每秒执行成功的微块数
+4. 每个微块被执行成功的用时 k，v
+5. 每秒已经接收的交易数 （到达的，包含已经被取出的）
+6. 每秒交易池中剩余的交易
+7. 每秒被共识提交的微块数
+8. 每个微块被共识提交的用时 k，v
+
+
+*/
+
+func (r *Replica) collectData() {
+	collectMu.Lock()
+	defer collectMu.Unlock()
+
+	//在replica中维护下面的变量，replica放一个mb池
+	// stableNumList := make([]int, 0) //每秒stable的微块数
+	// executedNumList := make([]int,0) //每秒执行成功的微块数
+	// committedNumList := make([]int,0) //每秒被共识提交的微块数
+	// receiveTxNumList := make([]int,0) //每秒已经接收的交易数 （到达的，包含已经被取出的）
+	// poolTxNumList := make([]int,0) //每秒交易池中剩余的交易
+
 }
 
 func (r *Replica) startSignal() {
