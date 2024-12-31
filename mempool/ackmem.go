@@ -13,14 +13,16 @@ import (
 	"github.com/gitferry/bamboo/identity"
 	"github.com/gitferry/bamboo/log"
 	"github.com/gitferry/bamboo/message"
+	"github.com/gitferry/bamboo/monitor"
 	"github.com/gitferry/bamboo/node"
 	"github.com/gitferry/bamboo/utils"
 )
 
 /*
-	TODO: 区块打包策略： 贪心、随机、DP
-			后台线程计算最优
-			最优解计算次数打log记录时间
+TODO: 区块打包策略： 贪心、随机、DP
+
+	后台线程计算最优
+	最优解计算次数打log记录时间
 */
 type AckMem struct {
 	stableMicroblocks  *list.List
@@ -41,6 +43,7 @@ type AckMem struct {
 	mu                 sync.Mutex
 	gm                 *group.GroupManager
 	node               node.Node
+	monitor            *monitor.MonitorManager
 }
 
 type PendingMicroblock struct {
@@ -69,6 +72,7 @@ func NewAckMem(n node.Node, gm *group.GroupManager) *AckMem {
 		txnList:            list.New(),
 		gm:                 gm,
 		node:               n,
+		monitor:            monitor.NewMonitorManager(),
 	}
 	return ack
 }
@@ -120,7 +124,7 @@ func (am *AckMem) AddTxn(txn *message.Transaction) (bool, *blockchain.MicroBlock
 	}
 }
 
-//仅用来创建微块，只包含最基本的交易信息等
+// 仅用来创建微块，只包含最基本的交易信息等
 func (am *AckMem) GenerateMb(txs []*message.Transaction) (bool, *blockchain.MicroBlock) {
 	if am.RemainingMB() >= int64(am.memsize) {
 		log.Warningf("Mempool is full, can't generate MB")
@@ -246,6 +250,10 @@ func (am *AckMem) AddAck(ack *blockchain.Ack) {
 					TxNums:         len(target.microblock.Txns),
 					AckNodeList:    ackNodeList,
 				}
+				//自己发出的mb，记录下stable时间
+				am.monitor.CollectStableTime(target.microblock.Hash,
+					time.Now().Sub(target.microblock.CreateTimeStamp))
+
 				am.StableBuffer[target.microblock.Hash] = stable //保存stable信息
 				copy(stable.AckInGroup, target.AckInGroup)
 				copy(stable.AckOutGroup, target.AckOutGroup)
@@ -282,7 +290,8 @@ func (am *AckMem) AddStable(stable *blockchain.Stable) {
 	}
 	//保存stable信息
 	am.StableBuffer[stable.MicroblockID] = *stable
-
+	//记录stable时间
+	am.monitor.CollectStableTime(stable.MicroblockID, time.Now().Sub(stable.MbCreationTime))
 	target, received := am.pendingMicroblocks[stable.MicroblockID]
 	//check if the stable arrives before the microblock
 	if received {
@@ -455,7 +464,7 @@ func (am *AckMem) FindMicroblock(id crypto.Identifier) (bool, *blockchain.MicroB
 // FillProposal pulls microblocks from the mempool and build a pending block,
 // a pending block should include the proposal, micorblocks that already exist,
 // and a missing list if there's any
-//接受Proposal后，会通过fillProposal来获取丢失的微块
+// 接受Proposal后，会通过fillProposal来获取丢失的微块
 func (am *AckMem) FillProposal(p *blockchain.Proposal) *blockchain.PendingBlock {
 	am.mu.Lock()
 	defer am.mu.Unlock()
@@ -544,7 +553,7 @@ func (am *AckMem) FetchMB(p *blockchain.Proposal) *blockchain.PendingBlock {
 // FillProposal pulls microblocks from the mempool and build a pending block,
 // a pending block should include the proposal, micorblocks that already exist,
 // and a missing list if there's any
-//payload包含收到的和没收到的mb
+// payload包含收到的和没收到的mb
 func (am *AckMem) FillProposalFromGroup(p *blockchain.Proposal) *blockchain.PendingBlock {
 	am.mu.Lock()
 	defer am.mu.Unlock()
@@ -581,7 +590,7 @@ func (am *AckMem) FillProposalFromGroup(p *blockchain.Proposal) *blockchain.Pend
 // FillProposal pulls microblocks from the mempool and build a pending block,
 // a pending block should include the proposal, micorblocks that already exist,
 // and a missing list if there's any
-//只获取自己组的区块
+// 只获取自己组的区块
 func (am *AckMem) FillProposalByGroup(p *blockchain.Proposal) *blockchain.PendingBlock {
 	am.mu.Lock()
 	defer am.mu.Unlock()

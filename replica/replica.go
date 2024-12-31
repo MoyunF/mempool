@@ -26,6 +26,7 @@ import (
 	"github.com/gitferry/bamboo/log"
 	"github.com/gitferry/bamboo/mempool"
 	"github.com/gitferry/bamboo/message"
+	"github.com/gitferry/bamboo/monitor"
 	"github.com/gitferry/bamboo/node"
 	"github.com/gitferry/bamboo/pacemaker"
 	"github.com/gitferry/bamboo/types"
@@ -35,11 +36,12 @@ type Replica struct {
 	node.Node
 	Safety
 	election.Election
-	sm   mempool.SharedMempool
-	pm   *pacemaker.Pacemaker
-	ex   *execute.Executor
-	gm   *group.GroupManager
-	Pool *txpool.Txpool
+	sm      mempool.SharedMempool
+	pm      *pacemaker.Pacemaker
+	ex      *execute.Executor
+	gm      *group.GroupManager
+	Pool    *txpool.Txpool
+	monitor *monitor.MonitorManager
 	/*for group by lxx*/
 
 	kafkaProducer *kafka.KafkaProducer
@@ -126,6 +128,8 @@ func NewReplica(id identity.NodeID, alg string, isByz bool) *Replica {
 	r.gm = group.NewGroupManager(r.ID())
 	//交易池
 	r.Pool = txpool.NewTxpool(r.Node)
+	//监控器
+	r.monitor = monitor.NewMonitorManager()
 	//限制微块广播，用来控制最多可以广播多少微块
 	r.mbBroadcast = make(chan interface{}, config.GetConfig().Mb_broadcast)
 	//r.estimator = NewEstimator()
@@ -394,7 +398,7 @@ func (r *Replica) handleQuery(m message.Query) {
 	aveCreationTime := float64(r.totalCreateDuration.Milliseconds()) / float64(r.proposedNo)
 	aveTxRate := float64(r.sm.TotalTx()) / time.Now().Sub(r.startTime).Seconds()
 	aveRoundTime := float64(r.totalRoundTime.Milliseconds()) / float64(r.roundNo)
-	aveHops := float64(r.totalHops) / float64(r.totalCommittedMBs)
+	aveHops := float64(r.totalHops) / float64(r.getTotalCommittedBlock())
 	aveProposeTime := float64(r.totalProposeDuration.Milliseconds()) / float64(r.receivedNo)
 	aveDisseminationTime := float64(r.totalDisseminationTime.Milliseconds()) / float64(r.totalMicroblocks)
 	aveRealDissTime := aveDisseminationTime
@@ -473,7 +477,7 @@ func (r *Replica) saveQuery() {
 	aveCreationTime := float64(r.totalCreateDuration.Milliseconds()) / float64(r.proposedNo)
 	aveTxRate := float64(r.sm.TotalTx()) / time.Now().Sub(r.startTime).Seconds()
 	aveRoundTime := float64(r.totalRoundTime.Milliseconds()) / float64(r.roundNo)
-	aveHops := float64(r.totalHops) / float64(r.totalCommittedMBs)
+	aveHops := float64(r.totalHops) / float64(r.getTotalCommittedBlock())
 	aveProposeTime := float64(r.totalProposeDuration.Milliseconds()) / float64(r.receivedNo)
 	aveDisseminationTime := float64(r.totalDisseminationTime.Milliseconds()) / float64(r.totalMicroblocks)
 	aveRealDissTime := aveDisseminationTime
@@ -831,6 +835,7 @@ func (r *Replica) processCommittedBlock(block *blockchain.Block) {
 	deliver := make([]*blockchain.MicroBlock, 0)
 	r.totalCommittedMBs += len(block.MicroblockList())
 	for _, mb := range block.MicroblockList() {
+		r.monitor.CollectCommitteddTime(mb.Hash, time.Now().Sub(mb.CreateTimeStamp))
 		if _, exist := r.CommitedMb[mb.Hash]; exist {
 			log.Debugf("processCommittedBlock() --- 提交了重复的区块%x", mb.Hash)
 			continue
@@ -1038,6 +1043,7 @@ func (r *Replica) startMonitor(duration time.Duration, interval time.Duration) {
 		select {
 		case <-ticker.C:
 			//监控指标
+			r.collectData()
 		}
 	}
 
@@ -1062,14 +1068,26 @@ var collectMu sync.Mutex
 func (r *Replica) collectData() {
 	collectMu.Lock()
 	defer collectMu.Unlock()
+	r.monitor.CollectStableNum(r.sm.TotalStableMb())
+	r.monitor.CollectCommittedNum(r.getTotalCommittedBlock())
+	r.monitor.CollectExecutedNum(r.ex.TotalNum())
+	r.monitor.CollectReceiveTxNum(r.Pool.ReceiveNum())
+	r.monitor.CollectePoolTxNum(r.Pool.TxLen())
+	log.Infof("collectData() --- [%v] 已收集[%v]的数据", r.ID(), time.Now())
+	log.Debugf("collectData() --- [%v]: stableNUM:[%v],committedNum:[%v],executedNum:[%v],receiveTxNum:[%v],poolTxNum:[%v]",
+		r.ID(),
+		r.monitor.GetStableNumList(),
+		r.monitor.GetCommittedNumList(),
+		r.monitor.GetExecutedNumList(),
+		r.monitor.GetReceiveTxNumList(),
+		r.monitor.GetPoolTxNumList(),
+	)
+}
 
-	//在replica中维护下面的变量，replica放一个mb池
-	// stableNumList := make([]int, 0) //每秒stable的微块数
-	// executedNumList := make([]int,0) //每秒执行成功的微块数
-	// committedNumList := make([]int,0) //每秒被共识提交的微块数
-	// receiveTxNumList := make([]int,0) //每秒已经接收的交易数 （到达的，包含已经被取出的）
-	// poolTxNumList := make([]int,0) //每秒交易池中剩余的交易
-
+func (r *Replica) getTotalCommittedBlock() int {
+	lock.Lock()
+	defer lock.Unlock()
+	return r.totalCommittedMBs
 }
 
 func (r *Replica) startSignal() {
@@ -1100,6 +1118,8 @@ func (r *Replica) Start() {
 	log.Infof("Start() --- [%v] start", r.Node.ID())
 	go r.ListenLocalEvent()
 	go r.ListenCommittedBlocks()
+
+	go r.startMonitor(50*time.Second, 1*time.Second)
 
 	for r.isStarted.Load() {
 		event := <-r.eventChan

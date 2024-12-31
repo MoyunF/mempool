@@ -30,7 +30,7 @@ while read -r CONTAINER_INFO; do
   if [[ $CONTAINER_NAME == mempool* ]]; then
     echo "在容器 $CONTAINER_NAME ($CONTAINER_ID) 中执行命令，id=$ID"
 
-    docker exec "$CONTAINER_ID" sh -c "cd /collab && nohup ./run.sh $ID $EXP_ID > /dev/null 2>&1 &"
+    docker exec "$CONTAINER_ID" sh -c "cd /collab && nohup ./run.sh $EXP_ID > /dev/null 2>&1 &"
 
     # 检查命令执行是否成功
     if [ $? -ne 0 ]; then
