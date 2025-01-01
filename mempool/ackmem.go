@@ -230,9 +230,9 @@ func (am *AckMem) AddAck(ack *blockchain.Ack) {
 		}
 		if target.ackNum >= am.threshhold {
 			if _, exists := am.stableMBs[target.microblock.Hash]; !exists {
-				ackNodeList := make([]identity.NodeID, 0)
+				ackNodeList := make(map[identity.NodeID]struct{})
 				for node := range target.ackMap {
-					ackNodeList = append(ackNodeList, node)
+					ackNodeList[node] = struct{}{}
 				}
 				am.stableMicroblocks.PushBack(target.microblock)
 				am.stableMBs[target.microblock.Hash] = struct{}{}
@@ -315,11 +315,12 @@ func (am *AckMem) AddStable(stable *blockchain.Stable) {
 		}
 
 		mb := &blockchain.MicroBlock{
-			IsFake:    true,
-			Hash:      stable.MicroblockID,
-			GroupId:   stable.GroupId,
-			Timestamp: stable.MbCreationTime,
-			Txns:      fakeTxns,
+			IsFake:           true,
+			Hash:             stable.MicroblockID,
+			GroupId:          stable.GroupId,
+			CreateTimeStamp:  stable.MbCreationTime,
+			Txns:             fakeTxns,
+			GenerateNodeList: stable.AckNodeList,
 		}
 		am.microblockMap[mb.Hash] = mb
 		am.stableMicroblocks.PushBack(mb)
@@ -393,6 +394,7 @@ func (am *AckMem) GeneratePayload() *blockchain.Payload {
 		if mb == nil {
 			break
 		}
+		log.Debugf("GeneratePayload() --- for debug , mb: [%x] mb's time :[%v] ", mb.Hash, mb.Timestamp)
 		//log.Debugf("GeneratePayload() --- [%v]  mb [%x] is deleted from mempool when proposing", am.node.ID(), mb.Hash)
 		microblockList = append(microblockList, mb)
 		ackNodeList = append(ackNodeList, am.GenerateAckNodeList(mb))
@@ -527,7 +529,7 @@ func (am *AckMem) FetchMB(p *blockchain.Proposal) *blockchain.PendingBlock {
 			existingBlocks = append(existingBlocks, mb)
 		} else {
 			log.Debugf("FetchMB() --- [%v]Porposal中的mb [%x]，在本地无法找到, 构建一个假块用来给执行器用", am.node.ID(), id)
-			//在这里生成假块的是否，需要增加一些假的交易信息，这是为了方便统计已经共识的交易信息
+			//在这里生成假块的时候，需要增加一些假的交易信息，这是为了方便统计已经共识的交易信息
 			//否则假块中没有交易，共识的交易数量会缺少这部分交易
 			fakeTxns := make([]*message.Transaction, 0, p.TxNums[index])
 			for i := 0; i < p.TxNums[index]; i++ {

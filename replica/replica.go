@@ -593,7 +593,7 @@ func (r *Replica) observePool() {
 								targetMember[identity.NewNodeID(v)] = struct{}{}
 							}
 							mb.GenerateNodeList = targetMember
-							log.Debugf("ObservePool() ---[%v] brocadcast mb [%x] to sample [%v]", r.ID(), mb.Hash, targetMember)
+							log.Debugf("ObservePool() ---[%v] brocadcast mb [%x] to sample [%v]. mb.GenerateNodeList[%v]", r.ID(), mb.Hash, targetMember, mb.GenerateNodeList)
 							r.BroadcastByGroup(mb, targetMember)
 						} else {
 							log.Debugf("ObservePool() --- [%v] broadcastToAll mb's hash:[%x]", r.ID(), mb.Hash)
@@ -856,7 +856,7 @@ func (r *Replica) processCommittedBlock(block *blockchain.Block) {
 		r.totalHops += mb.Hops
 	}
 	r.committedNo++
-	log.Infof("processCommittedBlock() --- [%v] the block is committed, No. of microblocks: %v, No. of tx: %v, view: %v, current view: %v, id: %x",
+	log.Debugf("processCommittedBlock() --- [%v] the block is committed, No. of microblocks: %v, No. of tx: %v, view: %v, current view: %v, id: %x",
 		r.ID(), len(block.MicroblockList()), txCount, block.View, r.pm.GetCurView(), block.ID)
 	r.ex.MbReceive <- deliver //全部交付
 }
@@ -922,6 +922,7 @@ func (r *Replica) proposeBlock(view types.View) {
 	//if config.Configuration.MemType == "time" {
 	//	r.waitUntilStable(payload)
 	//}
+	log.Debugf("proposeBlock() --- for debug, payload mb time list[%v]", payload.GenerateTimeList())
 	proposal := r.Safety.MakeProposal(
 		view,
 		payload.GenerateHashList(),
@@ -1048,6 +1049,8 @@ func (r *Replica) startMonitor(duration time.Duration, interval time.Duration) {
 	}
 
 	log.Infof("startMonitor() --- Monitoring finished")
+	filepath := "./logs/result" + string(r.ID()) + ".json"
+	r.monitor.SaveResult(filepath)
 }
 
 var collectMu sync.Mutex
