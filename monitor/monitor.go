@@ -3,6 +3,7 @@ package monitor
 import (
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io/ioutil"
 	"sync"
 	"time"
@@ -100,21 +101,21 @@ func (m *MonitorManager) CollectePoolTxNum(poolTxNum int) {
 func (m *MonitorManager) CollectStableTime(mbHash crypto.Identifier, duration time.Duration) {
 	mu.Lock()
 	defer mu.Unlock()
-	m.StableTime[m.idToString(mbHash)] = duration.String()
+	m.StableTime[m.idToString(mbHash)] = m.durationToMs(duration)
 }
 
 // mb 执行成功所用时间
 func (m *MonitorManager) CollectExecuteTime(mbHash crypto.Identifier, duration time.Duration) {
 	mu.Lock()
 	defer mu.Unlock()
-	m.ExecuteTime[m.idToString(mbHash)] = duration.String()
+	m.ExecuteTime[m.idToString(mbHash)] = m.durationToMs(duration)
 }
 
 // mb committed所用时间
 func (m *MonitorManager) CollectCommitteddTime(mbHash crypto.Identifier, duration time.Duration) {
 	mu.Lock()
 	defer mu.Unlock()
-	m.CommittedTime[m.idToString(mbHash)] = duration.String()
+	m.CommittedTime[m.idToString(mbHash)] = m.durationToMs(duration)
 }
 
 // f+1个执行结果的所用时间
@@ -123,13 +124,13 @@ func (m *MonitorManager) CollectResultTime(mbHash crypto.Identifier, duration ti
 	defer mu.Unlock()
 	if list, exist := m.ResultTime[m.idToString(mbHash)]; exist {
 		log.Debugf("CollectResultTime() --- mb:[%x] exist len:[%v], list[%v]", mbHash, len(list), list)
-		list = append(list, duration.String())
+		list = append(list, m.durationToMs(duration))
 		//由于append时数组触发扩容，产生了新的数组因此需要将修改后的切片与map重新绑定
 		m.ResultTime[m.idToString(mbHash)] = list
 	} else {
 		log.Debugf("CollectResultTime() --- new list mb:[%x]", mbHash)
 		timeList := make([]string, 0)
-		timeList = append(timeList, duration.String())
+		timeList = append(timeList, m.durationToMs(duration))
 		m.ResultTime[m.idToString(mbHash)] = timeList
 	}
 }
@@ -138,7 +139,7 @@ func (m *MonitorManager) CollectResultTime(mbHash crypto.Identifier, duration ti
 func (m *MonitorManager) CollectMbReceiveTime(mbHash crypto.Identifier, duration time.Duration) {
 	mu.Lock()
 	defer mu.Unlock()
-	m.MbReceivedTime[m.idToString(mbHash)] = duration.String()
+	m.MbReceivedTime[m.idToString(mbHash)] = m.durationToMs(duration)
 }
 
 // stable的mb数量
@@ -238,4 +239,13 @@ func (m *MonitorManager) SaveResult(filePath string) error {
 
 	log.Debugf("监控数据已保存到 %s", filePath)
 	return nil
+}
+
+//将duration格式化为ms字符串
+func (m *MonitorManager) durationToMs(duration time.Duration) string {
+	// 强制转换为毫秒
+	milliseconds := float64(duration) / float64(time.Millisecond)
+
+	// 打印毫秒数
+	return fmt.Sprintf("%.3f", milliseconds)
 }
