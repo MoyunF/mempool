@@ -55,7 +55,7 @@ type ExecuteResult struct {
 	No        int              //微块顺序
 	Result    string           //区块执行后的状态
 
-	buildTime   time.Time //生成结果的时间
+	BuildTime   time.Time //生成结果的时间
 	receiveTime time.Time //收到结果的时间
 	enableTime  time.Time //结果的时间
 }
@@ -194,6 +194,7 @@ func (e *Executor) ExecuteThread() { //表示是有一个mb被成功执行
 func (e *Executor) HandleResult(result *ExecuteResult) {
 	e.lock.Lock()
 	defer e.lock.Unlock()
+	e.monitor.CollectResultTime(crypto.Identifier(result.Mb), time.Now().Sub(result.BuildTime))
 	high_done_index := 0
 	for i := 1; i <= result.No; i++ {
 		if record, eixst := e.mbPending.done[i]; eixst {
@@ -210,7 +211,7 @@ func (e *Executor) HandleResult(result *ExecuteResult) {
 		}
 	}
 
-	log.Debugf("HandleResult() --- [%v] 收到来自%v的执行成功，执行的mb是%x,目前一共有个%v个执行成功", e.node.ID(), result.PropsalId, result.Mb, len(e.mbPending.done[result.No]))
+	log.Debugf("HandleResult() --- [%v] 收到来自%v的执行成功，执行的mb是%x,目前一共有个%v个执行成功,执行成功的创建时间[%v]", e.node.ID(), result.PropsalId, result.Mb, len(e.mbPending.done[result.No]), result.BuildTime)
 	if high_done_index != 0 {
 		//又可以更新的
 		log.Debugf("HandleResult() --- [%v] 执行队列%v以及之前的都被执行成功了", e.node.ID(), high_done_index)
@@ -404,10 +405,10 @@ func (e *Executor) generateExecuteResult(mb *blockchain.MicroBlock) *ExecuteResu
 			Mb:        mbHash(mb.Hash),
 			Result:    fakestate,
 			No:        mb.CommittedNo,
-			buildTime: time.Now(),
+			BuildTime: time.Now(),
 		}
 		//广播
-		log.Debugf("generateExecuteResult() ---[%v] mb [%x]执行后的结果已经获取", e.node.ID(), mb.Hash)
+		log.Debugf("generateExecuteResult() ---[%v] mb [%x]执行后的结果已经获取，build_time:[%v]", e.node.ID(), mb.Hash, result.BuildTime)
 		return result
 	}
 	log.Debugf("generateExecuteResult() ---[%v] mb [%x]执行后的结果获取失败", e.node.ID(), mb.Hash)

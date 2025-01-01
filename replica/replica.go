@@ -288,6 +288,7 @@ func (r *Replica) HandleMicroblock(mb blockchain.MicroBlock) {
 			if mb.Sender != r.ID() {
 				log.Debugf("HandleMircoblock() --- [%v] receive a mb, reply ack to [%v], mb's hash [%x]", r.ID(), mb.Sender, mb.Hash)
 				r.Send(mb.Sender, blockchain.MakeAck(r.ID(), mb.Hash))
+				r.monitor.CollectMbReceiveTime(mb.Hash, time.Now().Sub(mb.CreateTimeStamp))
 			} else {
 				r.HandleAck(*ack)
 			}
@@ -1049,8 +1050,23 @@ func (r *Replica) startMonitor(duration time.Duration, interval time.Duration) {
 	}
 
 	log.Infof("startMonitor() --- Monitoring finished")
-	filepath := "./logs/result" + string(r.ID()) + ".json"
-	r.monitor.SaveResult(filepath)
+
+	var filePath string
+	nodesNum := fmt.Sprint(config.GetConfig().N())               //节点数
+	threshold := fmt.Sprint(int(config.Configuration.Threshold)) //2f+1
+	txPerSecond := fmt.Sprint(config.Configuration.TxPerSecond)  //每秒交易
+	id := fmt.Sprint(r.ID())                                     //节点id
+	groupNum := fmt.Sprint(config.Configuration.GroupNum)        //分组数
+	payloadSize := fmt.Sprint(config.Configuration.PayloadSize)  //交易大侠
+	time := fmt.Sprint(config.Configuration.Time)
+	if config.Configuration.BroadcastByGroup {
+		filePath = "./logs/ID" + id + "-N" + nodesNum + "-Threshold" + threshold + "-Tx" + txPerSecond + "-txSize" + payloadSize + "-Time" + time + "-Gnum" + groupNum + "-group" + "-duration" + duration.String() + "-interval" + interval.String() + ".json"
+	} else if config.Configuration.BroadcastBySample {
+		filePath = "./logs/ID" + id + "-N" + nodesNum + "-Threshold" + threshold + "-Tx" + txPerSecond + "-txSize" + payloadSize + "-Time" + time + "-sample" + "-duration" + duration.String() + "-interval" + interval.String() + ".json"
+	} else {
+		filePath = "./logs/ID" + id + "-N" + nodesNum + "-Threshold" + threshold + "-Tx" + txPerSecond + "-txSize" + payloadSize + "-Time" + time + "-stratus" + "-duration" + duration.String() + "-interval" + interval.String() + ".json"
+	}
+	r.monitor.SaveResult(filePath)
 }
 
 var collectMu sync.Mutex
@@ -1122,7 +1138,9 @@ func (r *Replica) Start() {
 	go r.ListenLocalEvent()
 	go r.ListenCommittedBlocks()
 
-	go r.startMonitor(50*time.Second, 1*time.Second)
+	duration := time.Duration(config.GetConfig().Duration) //监控时间 单位ms
+	interval := time.Duration(config.GetConfig().Interval) //监控频率 单位ms
+	go r.startMonitor(duration*time.Millisecond, interval*time.Millisecond)
 
 	for r.isStarted.Load() {
 		event := <-r.eventChan

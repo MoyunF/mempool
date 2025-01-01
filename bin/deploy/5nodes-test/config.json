@@ -40,6 +40,8 @@
   "pprof": false,
   "broadcastBygroup":false,
   "broadcastBySample":true,
+  "duration" : 50000,
+  "interval" : 1000,
   "onlyworker":false,
   "model":"exp2",
   "txPerSecond":1000,
@@ -65,6 +67,7 @@
   "q": 2,
   "p": 0,
   "r": 5,
+
   "slow_no": 0,
   "zipf": false,
   "zipfian_s": 2,

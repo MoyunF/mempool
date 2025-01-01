@@ -11,16 +11,27 @@ import (
 	"github.com/gitferry/bamboo/log"
 )
 
+/*
+	目前已支持的数据：
+		1.stable、committed、executed的数量随时间变化图， total = tps * time tps是斜率，可以计算
+		2.stable、committed、exiceted的平均时延，mb的时延分布情况
+		3.result被接受的平均用时 mbhash:time
+		4.mb从创建到接收的用时，不包括后面投票
+
+*/
+
 type MonitorManager struct {
 	//结果收集
-	StableNumList    []int             `json:"stable_num_list"`     //每秒stable的微块
-	ExecutedNumList  []int             `json:"executed_num_list"`   //每秒执行成功的微块数
-	CommittedNumList []int             `json:"committed_num_list"`  //每秒被共识提交的微块数
-	ReceiveTxNumList []int             `json:"receive_tx_num_list"` //每秒已经接收的交易数 （到达的，包含已经被取出的）
-	PoolTxNumList    []int             `json:"pool_tx_num_list"`    //每秒交易池中剩余的交易
-	StableTime       map[string]string `json:"stable_time"`         //每个微块被stable的用时
-	ExecuteTime      map[string]string `json:"execute_time"`        //每个微块执行成功的用时，此处只记录当前节点执行的mb用时，想获得全部mb的用时，需要将所有节点的记录取并集
-	CommittedTime    map[string]string `json:"committed_time"`      //每个微块被共识提交的用时
+	StableNumList    []int               `json:"stable_num_list"`     //每秒stable的微块
+	ExecutedNumList  []int               `json:"executed_num_list"`   //每秒执行成功的微块数
+	CommittedNumList []int               `json:"committed_num_list"`  //每秒被共识提交的微块数
+	ReceiveTxNumList []int               `json:"receive_tx_num_list"` //每秒已经接收的交易数 （到达的，包含已经被取出的）
+	PoolTxNumList    []int               `json:"pool_tx_num_list"`    //每秒交易池中剩余的交易
+	StableTime       map[string]string   `json:"stable_time"`         //每个微块被stable的用时
+	ExecuteTime      map[string]string   `json:"execute_time"`        //每个微块执行成功的用时，此处只记录当前节点执行的mb用时，想获得全部mb的用时，需要将所有节点的记录取并集
+	CommittedTime    map[string]string   `json:"committed_time"`      //每个微块被共识提交的用时
+	ResultTime       map[string][]string `json:"result_time"`         //每个需要协作的微块收到执行完成的用时,所用时间为列表，代表来自不同节点的执行结果
+	MbReceivedTime   map[string]string   `json:"mb_received_time"`    //每个微块被节点接受的用时
 }
 
 var monitorManager *MonitorManager = nil
@@ -34,14 +45,16 @@ func NewMonitorManager() *MonitorManager {
 		log.Debugf("初始化监控器")
 		monitorManager = new(MonitorManager)
 		//结果收集器
-		monitorManager.StableNumList = make([]int, 0)          //每秒stable的微块数
-		monitorManager.ExecutedNumList = make([]int, 0)        //每秒执行成功的微块数
-		monitorManager.CommittedNumList = make([]int, 0)       //每秒被共识提交的微块数
-		monitorManager.ReceiveTxNumList = make([]int, 0)       //每秒已经接收的交易数 （到达的，包含已经被取出的）
-		monitorManager.PoolTxNumList = make([]int, 0)          //每秒交易池中剩余的交易
-		monitorManager.StableTime = make(map[string]string)    //每个微块被stable的用时
-		monitorManager.ExecuteTime = make(map[string]string)   //每个微块执行成功的用时
-		monitorManager.CommittedTime = make(map[string]string) //每个微块被共识提交的用时
+		monitorManager.StableNumList = make([]int, 0)           //每秒stable的微块数
+		monitorManager.ExecutedNumList = make([]int, 0)         //每秒执行成功的微块数
+		monitorManager.CommittedNumList = make([]int, 0)        //每秒被共识提交的微块数
+		monitorManager.ReceiveTxNumList = make([]int, 0)        //每秒已经接收的交易数 （到达的，包含已经被取出的）
+		monitorManager.PoolTxNumList = make([]int, 0)           //每秒交易池中剩余的交易
+		monitorManager.StableTime = make(map[string]string)     //每个微块被stable的用时
+		monitorManager.ExecuteTime = make(map[string]string)    //每个微块执行成功的用时
+		monitorManager.CommittedTime = make(map[string]string)  //每个微块被共识提交的用时
+		monitorManager.ResultTime = make(map[string][]string)   //微块对应result被接受的用时
+		monitorManager.MbReceivedTime = make(map[string]string) //mb被接收的用时
 		log.Debugf("监控器初始化成功 --- %v", monitorManager)
 		return monitorManager
 	}
@@ -104,6 +117,30 @@ func (m *MonitorManager) CollectCommitteddTime(mbHash crypto.Identifier, duratio
 	m.CommittedTime[m.idToString(mbHash)] = duration.String()
 }
 
+// f+1个执行结果的所用时间
+func (m *MonitorManager) CollectResultTime(mbHash crypto.Identifier, duration time.Duration) {
+	mu.Lock()
+	defer mu.Unlock()
+	if list, exist := m.ResultTime[m.idToString(mbHash)]; exist {
+		log.Debugf("CollectResultTime() --- mb:[%x] exist len:[%v], list[%v]", mbHash, len(list), list)
+		list = append(list, duration.String())
+		//由于append时数组触发扩容，产生了新的数组因此需要将修改后的切片与map重新绑定
+		m.ResultTime[m.idToString(mbHash)] = list
+	} else {
+		log.Debugf("CollectResultTime() --- new list mb:[%x]", mbHash)
+		timeList := make([]string, 0)
+		timeList = append(timeList, duration.String())
+		m.ResultTime[m.idToString(mbHash)] = timeList
+	}
+}
+
+// mb创建到节点接收的用时
+func (m *MonitorManager) CollectMbReceiveTime(mbHash crypto.Identifier, duration time.Duration) {
+	mu.Lock()
+	defer mu.Unlock()
+	m.MbReceivedTime[m.idToString(mbHash)] = duration.String()
+}
+
 // stable的mb数量
 func (m *MonitorManager) GetStableNumList() []int {
 	mu.Lock()
@@ -140,24 +177,38 @@ func (m *MonitorManager) GetPoolTxNumList() []int {
 }
 
 // mb stable所用时间
-func (m *MonitorManager) GetStableTime(mbHash crypto.Identifier, duration time.Duration) map[string]string {
+func (m *MonitorManager) GetStableTime() map[string]string {
 	mu.Lock()
 	defer mu.Unlock()
 	return m.StableTime
 }
 
 // mb 执行成功所用时间
-func (m *MonitorManager) GetExecuteTime(mbHash crypto.Identifier, duration time.Duration) map[string]string {
+func (m *MonitorManager) GetExecuteTime() map[string]string {
 	mu.Lock()
 	defer mu.Unlock()
 	return m.ExecuteTime
 }
 
 // mb committed所用时间
-func (m *MonitorManager) GetCommitteddTime(mbHash crypto.Identifier, duration time.Duration) map[string]string {
+func (m *MonitorManager) GetCommitteddTime() map[string]string {
 	mu.Lock()
 	defer mu.Unlock()
 	return m.CommittedTime
+}
+
+// f+1个执行结果的用时
+func (m *MonitorManager) GetResultTime() map[string][]string {
+	mu.Lock()
+	defer mu.Unlock()
+	return m.ResultTime
+}
+
+// mb创建到接受的用时
+func (m *MonitorManager) GetMbReceiveTime() map[string]string {
+	mu.Lock()
+	defer mu.Unlock()
+	return m.MbReceivedTime
 }
 
 //hash转为16进制的字符串形式
