@@ -380,7 +380,7 @@ func (r *Replica) handleQuery(m message.Query) {
 	//aveRoundTime := float64(r.totalRoundTime.Milliseconds()) / float64(r.roundNo)
 	//aveProposeTime := aveRoundTime - aveProcessTime - aveVoteProcessTime
 	//latency := float64(r.totalDelay.Milliseconds()) / float64(r.latencyNo)
-	r.thrus += fmt.Sprintf("Time:%v TxPool:%v StableAccerlate:%v StableDelay:%v, TotalTx:%v TotalExectuedTx:%v Throughput:%v Delay:%v AveTxExecutedDelay:%v\n",
+	r.thrus += fmt.Sprintf("Time:%v TxPool:%v StableTPS:%v ,StableDelay:%v, TotalTx:%v TotalExectuedTx:%v Throughput:%v Delay:%v\n",
 		time.Now().Sub(r.startTime).Seconds(),
 		r.Pool.TxLen(),
 		float64(r.sm.TotalStableMb())/time.Now().Sub(r.startTime).Seconds(),
@@ -389,7 +389,6 @@ func (r *Replica) handleQuery(m message.Query) {
 		r.ex.TotalNum(),
 		float64(r.totalCommittedTx)/time.Now().Sub(r.tmpTime).Seconds(), //tps 从收到proposal开始计时
 		float64(r.totalDelay.Milliseconds())/float64(r.latencyNo),       //delay 交易从被提出到确认的时间
-		r.ex.DelayForQuery(), //执行时延
 	)
 	r.totalCommittedTx = 0
 	r.tmpTime = time.Now()
