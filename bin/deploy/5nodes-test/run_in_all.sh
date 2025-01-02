@@ -9,8 +9,8 @@ fi
 # 获取传入的命令
 COMMAND="$1"
 
-# 获取所有容器的 ID
-CONTAINERS=$(docker ps -q)
+# 获取所有容器的 ID 和名称
+CONTAINERS=$(docker ps --format "{{.ID}} {{.Names}}")
 
 # 如果没有容器运行
 if [ -z "$CONTAINERS" ]; then
@@ -18,8 +18,18 @@ if [ -z "$CONTAINERS" ]; then
   exit 1
 fi
 
-# 遍历容器并执行命令
-for CONTAINER in $CONTAINERS; do
-  echo "执行命令到容器: $CONTAINER"
-  docker exec -it "$CONTAINER" /bin/bash -c "cd /collab && $COMMAND"
-done
+while read -r CONTAINER_INFO; do
+  CONTAINER_ID=$(echo "$CONTAINER_INFO" | awk '{print $1}')
+  CONTAINER_NAME=$(echo "$CONTAINER_INFO" | awk '{print $2}')
+
+  # 仅处理容器名称以 mempool 开头的
+  if [[ $CONTAINER_NAME == mempool* ]]; then
+    # 遍历容器并执行命令
+      echo "执行命令: $COMMAND 到容器: $CONTAINER_NAME"
+      docker exec "$CONTAINER_ID" sh -c /bin/bash -c "cd /collab && $COMMAND"
+  fi
+done <<< "$CONTAINERS"
+echo "所有容器命令执行完成。"
+
+
+

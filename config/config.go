@@ -103,6 +103,10 @@ type Config struct {
 
 	//消息队列
 	MessageQueue Mconfig `json:"kafka"`
+
+	//监控器
+	Duration int `json:"duration"` //监控时间 单位ms
+	Interval int `json:"interval"` //打点间隔 单位ms
 }
 
 //var keys []crypto.PrivateKey

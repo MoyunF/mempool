@@ -25,3 +25,5 @@ server.*.log
 # vendor/
 .idea/
 .DS_Store
+server/server
+server/server

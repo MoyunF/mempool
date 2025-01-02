@@ -18,6 +18,7 @@ type Txpool struct {
 	Transactions []*message.Transaction //交易
 	Poolsize     int                    //交易池大小
 	Len          int                    //当前交易数量
+	receiveNum   int                    //已经接收到的总交易数
 	mu           sync.Mutex
 	FetchSignal  chan interface{}
 }
@@ -33,7 +34,7 @@ func NewTxpool(node node.Node) *Txpool {
 	return txpool
 }
 
-//添加nums笔交易
+// 添加nums笔交易
 func (pool *Txpool) AddTx(nums int) {
 	pool.mu.Lock()
 	defer pool.mu.Unlock()
@@ -46,6 +47,7 @@ func (pool *Txpool) AddTx(nums int) {
 			break
 		}
 		pool.Len += 1
+		pool.receiveNum += 1
 		tx := pool.generateTx(payloadSize, strconv.Itoa(pool.Len+i))
 		pool.Transactions = append(pool.Transactions, tx)
 		pool.FetchSignal <- struct{}{}
@@ -53,7 +55,7 @@ func (pool *Txpool) AddTx(nums int) {
 	//log.Debugf("%+v", pool.Transactions)
 }
 
-//取nums笔交易，如果不满足就取出所有交易
+// 取nums笔交易，如果不满足就取出所有交易
 func (pool *Txpool) FetchTx(nums int) []*message.Transaction {
 	pool.mu.Lock()
 	defer pool.mu.Unlock()
@@ -75,6 +77,12 @@ func (pool *Txpool) TxLen() int {
 	pool.mu.Lock()
 	defer pool.mu.Unlock()
 	return pool.Len
+}
+
+func (pool *Txpool) ReceiveNum() int {
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
+	return pool.receiveNum
 }
 
 // func (pool *Txpool) observePool() {

@@ -26,6 +26,7 @@ import (
 	"github.com/gitferry/bamboo/log"
 	"github.com/gitferry/bamboo/mempool"
 	"github.com/gitferry/bamboo/message"
+	"github.com/gitferry/bamboo/monitor"
 	"github.com/gitferry/bamboo/node"
 	"github.com/gitferry/bamboo/pacemaker"
 	"github.com/gitferry/bamboo/types"
@@ -35,11 +36,12 @@ type Replica struct {
 	node.Node
 	Safety
 	election.Election
-	sm   mempool.SharedMempool
-	pm   *pacemaker.Pacemaker
-	ex   *execute.Executor
-	gm   *group.GroupManager
-	Pool *txpool.Txpool
+	sm      mempool.SharedMempool
+	pm      *pacemaker.Pacemaker
+	ex      *execute.Executor
+	gm      *group.GroupManager
+	Pool    *txpool.Txpool
+	monitor *monitor.MonitorManager
 	/*for group by lxx*/
 
 	kafkaProducer *kafka.KafkaProducer
@@ -126,6 +128,8 @@ func NewReplica(id identity.NodeID, alg string, isByz bool) *Replica {
 	r.gm = group.NewGroupManager(r.ID())
 	//交易池
 	r.Pool = txpool.NewTxpool(r.Node)
+	//监控器
+	r.monitor = monitor.NewMonitorManager()
 	//限制微块广播，用来控制最多可以广播多少微块
 	r.mbBroadcast = make(chan interface{}, config.GetConfig().Mb_broadcast)
 	//r.estimator = NewEstimator()
@@ -193,7 +197,6 @@ func NewReplica(id identity.NodeID, alg string, isByz bool) *Replica {
 	default:
 		r.Safety = hotstuff.NewHotStuff(r.Node, r.pm, r.Election, r.committedBlocks, r.forkedBlocks)
 	}
-	go r.saveResult()
 	return r
 }
 
@@ -285,6 +288,7 @@ func (r *Replica) HandleMicroblock(mb blockchain.MicroBlock) {
 			if mb.Sender != r.ID() {
 				log.Debugf("HandleMircoblock() --- [%v] receive a mb, reply ack to [%v], mb's hash [%x]", r.ID(), mb.Sender, mb.Hash)
 				r.Send(mb.Sender, blockchain.MakeAck(r.ID(), mb.Hash))
+				r.monitor.CollectMbReceiveTime(mb.Hash, time.Now().Sub(mb.CreateTimeStamp))
 			} else {
 				r.HandleAck(*ack)
 			}
@@ -307,7 +311,7 @@ func (r *Replica) HandleMissingMBRequest(mbr message.MissingMBRequest) {
 	}
 }
 
-//lxx写的，重传对方没收到的stable块
+// lxx写的，重传对方没收到的stable块
 func (r *Replica) HandleMissingStableMb(mbr message.MissingStableMBRequest) {
 	log.Debugf("[%v] missing microblocks request is received from %v, missing mbs are: %x", r.ID(), mbr.RequesterID, mbr.MbID)
 	// r.missingCounts[mbr.RequesterID] += len(mbr.MissingMBList)
@@ -395,7 +399,7 @@ func (r *Replica) handleQuery(m message.Query) {
 	aveCreationTime := float64(r.totalCreateDuration.Milliseconds()) / float64(r.proposedNo)
 	aveTxRate := float64(r.sm.TotalTx()) / time.Now().Sub(r.startTime).Seconds()
 	aveRoundTime := float64(r.totalRoundTime.Milliseconds()) / float64(r.roundNo)
-	aveHops := float64(r.totalHops) / float64(r.totalCommittedMBs)
+	aveHops := float64(r.totalHops) / float64(r.getTotalCommittedBlock())
 	aveProposeTime := float64(r.totalProposeDuration.Milliseconds()) / float64(r.receivedNo)
 	aveDisseminationTime := float64(r.totalDisseminationTime.Milliseconds()) / float64(r.totalMicroblocks)
 	aveRealDissTime := aveDisseminationTime
@@ -420,17 +424,23 @@ func (r *Replica) handleQuery(m message.Query) {
 }
 
 /*
-	区块执行效率统计：
-		1. 执行全部区块所用的时间
-		2. 交易执行数量随时间的变化曲线 间隔1s
-		3. 交易TPS = 执行成功的交易 / 时间
-		4. 交易时延 = 交易的总时延 / 交易数
+		每个1s打一下TPS，统计最高值
+		时延：计算出每个小块的时延
+		区块执行效率统计：
+			1. 执行全部区块所用的时间
+			2. 交易执行数量随时间的变化曲线 间隔1s
+			3. 交易TPS = 执行成功的交易 / 时间
+			4. 交易时延 = 交易的总时延 / 交易数
 
-		每秒钟，发送当前成功执行的 节前时间戳点号 确认阈值 小块编号 小块执行完成时间 当
-		1. 全部小块执行成功后 / （t_最后一个小块的时间戳 - 小块被提交的提交时间）
-		2. 对时间戳进行四舍五入近似 或者 画平滑曲线
-		3. 对2的每个时间戳求TPS，取max
-		4. 对于每一个成功的小块：累加（t_小块的时间戳 - 小块被提交的提交时间）/ 小块数量
+	    每秒钟，发送当前成功执行的 节前时间戳点号 确认阈值 小块编号 小块执行完成时间 当
+
+	 1. 全部小块执行成功后 / （t_最后一个小块的时间戳 - 小块被提交的提交时间）
+
+	 2. 对时间戳进行四舍五入近似 或者 画平滑曲线
+
+	 3. 对2的每个时间戳求TPS，取max
+
+	 4. 对于每一个成功的小块：累加（t_小块的时间戳 - 小块被提交的提交时间）/ 小块数量
 */
 func (r *Replica) sendExecutedResult() {
 
@@ -468,7 +478,7 @@ func (r *Replica) saveQuery() {
 	aveCreationTime := float64(r.totalCreateDuration.Milliseconds()) / float64(r.proposedNo)
 	aveTxRate := float64(r.sm.TotalTx()) / time.Now().Sub(r.startTime).Seconds()
 	aveRoundTime := float64(r.totalRoundTime.Milliseconds()) / float64(r.roundNo)
-	aveHops := float64(r.totalHops) / float64(r.totalCommittedMBs)
+	aveHops := float64(r.totalHops) / float64(r.getTotalCommittedBlock())
 	aveProposeTime := float64(r.totalProposeDuration.Milliseconds()) / float64(r.receivedNo)
 	aveDisseminationTime := float64(r.totalDisseminationTime.Milliseconds()) / float64(r.totalMicroblocks)
 	aveRealDissTime := aveDisseminationTime
@@ -487,7 +497,7 @@ func (r *Replica) saveQuery() {
 	r.result = status
 }
 
-//只有通过客户端发送交易时，才会走这个接口的逻辑，否则observerPool
+// 只有通过客户端发送交易时，才会走这个接口的逻辑，否则observerPool
 func (r *Replica) handleTxn(m message.Transaction) {
 	r.startSignal()
 	log.Debugf("[%v] handleTxn ---  recivie tx TxID:[%v] ForwardNode:[%v] ", r.ID(), m.ID, m.NodeID)
@@ -527,7 +537,7 @@ func (r *Replica) handleTxn(m message.Transaction) {
 	r.kickOff()
 }
 
-//后台监控交易池情况，如果交易池数量大于msize，生成一个mb，并广播
+// 后台监控交易池情况，如果交易池数量大于msize，生成一个mb，并广播
 func (r *Replica) observePool() {
 	payloadsize := config.GetConfig().PayloadSize
 	msize := config.GetConfig().MSize
@@ -584,7 +594,7 @@ func (r *Replica) observePool() {
 								targetMember[identity.NewNodeID(v)] = struct{}{}
 							}
 							mb.GenerateNodeList = targetMember
-							log.Debugf("ObservePool() ---[%v] brocadcast mb [%x] to sample [%v]", r.ID(), mb.Hash, targetMember)
+							log.Debugf("ObservePool() ---[%v] brocadcast mb [%x] to sample [%v]. mb.GenerateNodeList[%v]", r.ID(), mb.Hash, targetMember, mb.GenerateNodeList)
 							r.BroadcastByGroup(mb, targetMember)
 						} else {
 							log.Debugf("ObservePool() --- [%v] broadcastToAll mb's hash:[%x]", r.ID(), mb.Hash)
@@ -775,7 +785,7 @@ func (r *Replica) randomPick() []identity.NodeID {
 	return pickedNode
 }
 
-//按组广播
+// 按组广播
 func (r *Replica) pickGroup() []identity.NodeID {
 	//取出对应组的人进行广播
 	n := config.GetConfig().N() - 1 // exluding the master
@@ -826,6 +836,7 @@ func (r *Replica) processCommittedBlock(block *blockchain.Block) {
 	deliver := make([]*blockchain.MicroBlock, 0)
 	r.totalCommittedMBs += len(block.MicroblockList())
 	for _, mb := range block.MicroblockList() {
+		r.monitor.CollectCommitteddTime(mb.Hash, time.Now().Sub(mb.CreateTimeStamp))
 		if _, exist := r.CommitedMb[mb.Hash]; exist {
 			log.Debugf("processCommittedBlock() --- 提交了重复的区块%x", mb.Hash)
 			continue
@@ -846,7 +857,7 @@ func (r *Replica) processCommittedBlock(block *blockchain.Block) {
 		r.totalHops += mb.Hops
 	}
 	r.committedNo++
-	log.Infof("processCommittedBlock() --- [%v] the block is committed, No. of microblocks: %v, No. of tx: %v, view: %v, current view: %v, id: %x",
+	log.Debugf("processCommittedBlock() --- [%v] the block is committed, No. of microblocks: %v, No. of tx: %v, view: %v, current view: %v, id: %x",
 		r.ID(), len(block.MicroblockList()), txCount, block.View, r.pm.GetCurView(), block.ID)
 	r.ex.MbReceive <- deliver //全部交付
 }
@@ -912,6 +923,7 @@ func (r *Replica) proposeBlock(view types.View) {
 	//if config.Configuration.MemType == "time" {
 	//	r.waitUntilStable(payload)
 	//}
+	log.Debugf("proposeBlock() --- for debug, payload mb time list[%v]", payload.GenerateTimeList())
 	proposal := r.Safety.MakeProposal(
 		view,
 		payload.GenerateHashList(),
@@ -1020,37 +1032,81 @@ func (r *Replica) ListenCommittedBlocks() {
 	}
 }
 
-//每隔1s保存一次结果
-func (r *Replica) saveResult() {
-	ticker := time.NewTicker(1 * time.Second)
-	done := make(chan bool)
+//用来监控节点的各项指标 duration：持续的时间  interval ： 每隔多少ms进行一次结果采样
 
-	go func() {
-		for {
-			select {
-			case <-done:
-				return
-			case <-ticker.C:
-				r.saveQuery()
-			}
+func (r *Replica) startMonitor(duration time.Duration, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	endTime := time.Now().Add(duration) // 计算结束时间
+	log.Infof("startMonitor() --- Monitoring started. Duration: %v s, Interval: %v s", duration.Seconds(), interval.Seconds())
+
+	for now := time.Now(); now.Before(endTime); now = time.Now() {
+		select {
+		case <-ticker.C:
+			//监控指标
+			r.collectData()
 		}
-	}()
+	}
 
-	//持续监听ns
-	time.Sleep(time.Duration(config.GetConfig().Time) * time.Second)
-	ticker.Stop()
-	done <- true
-	log.Resultf("nodesize:%v,byz:%v,group:%v,cold:%v,mbsize:%v,txsize:%v,txsInMb:%v,TxPerSecond:%v",
-		config.GetConfig().N(),
-		config.GetConfig().ByzNo,
-		config.GetConfig().BroadcastByGroup,
-		config.GetConfig().Benchmark.Cold,
-		config.GetConfig().MSize,
-		config.GetConfig().PayloadSize,
-		config.GetConfig().MSize/config.GetConfig().PayloadSize,
-		config.GetConfig().TxPerSecond,
+	log.Infof("startMonitor() --- Monitoring finished")
+
+	var filePath string
+	nodesNum := fmt.Sprint(config.GetConfig().N())               //节点数
+	threshold := fmt.Sprint(int(config.Configuration.Threshold)) //2f+1
+	txPerSecond := fmt.Sprint(config.Configuration.TxPerSecond)  //每秒交易
+	id := fmt.Sprint(r.ID())                                     //节点id
+	groupNum := fmt.Sprint(config.Configuration.GroupNum)        //分组数
+	payloadSize := fmt.Sprint(config.Configuration.PayloadSize)  //交易大侠
+	time := fmt.Sprint(config.Configuration.Time)
+	if config.Configuration.BroadcastByGroup {
+		filePath = "./logs/ID" + id + "-N" + nodesNum + "-Threshold" + threshold + "-Tx" + txPerSecond + "-txSize" + payloadSize + "-Time" + time + "-Gnum" + groupNum + "-group" + "-duration" + duration.String() + "-interval" + interval.String() + ".json"
+	} else if config.Configuration.BroadcastBySample {
+		filePath = "./logs/ID" + id + "-N" + nodesNum + "-Threshold" + threshold + "-Tx" + txPerSecond + "-txSize" + payloadSize + "-Time" + time + "-sample" + "-duration" + duration.String() + "-interval" + interval.String() + ".json"
+	} else {
+		filePath = "./logs/ID" + id + "-N" + nodesNum + "-Threshold" + threshold + "-Tx" + txPerSecond + "-txSize" + payloadSize + "-Time" + time + "-stratus" + "-duration" + duration.String() + "-interval" + interval.String() + ".json"
+	}
+	r.monitor.SaveResult(filePath)
+}
+
+var collectMu sync.Mutex
+
+/**
+1. 每秒stable的微块数
+2. 每个微块被stable的用时 k，v
+3. 每秒执行成功的微块数
+4. 每个微块被执行成功的用时 k，v
+5. 每秒已经接收的交易数 （到达的，包含已经被取出的）
+6. 每秒交易池中剩余的交易
+7. 每秒被共识提交的微块数
+8. 每个微块被共识提交的用时 k，v
+
+
+*/
+
+func (r *Replica) collectData() {
+	collectMu.Lock()
+	defer collectMu.Unlock()
+	r.monitor.CollectStableNum(r.sm.TotalStableMb())
+	r.monitor.CollectCommittedNum(r.getTotalCommittedBlock())
+	r.monitor.CollectExecutedNum(r.ex.TotalNum())
+	r.monitor.CollectReceiveTxNum(r.Pool.ReceiveNum())
+	r.monitor.CollectePoolTxNum(r.Pool.TxLen())
+	log.Infof("collectData() --- [%v] 已收集[%v]的数据", r.ID(), time.Now())
+	log.Debugf("collectData() --- [%v]: stableNUM:[%v],committedNum:[%v],executedNum:[%v],receiveTxNum:[%v],poolTxNum:[%v]",
+		r.ID(),
+		r.monitor.GetStableNumList(),
+		r.monitor.GetCommittedNumList(),
+		r.monitor.GetExecutedNumList(),
+		r.monitor.GetReceiveTxNumList(),
+		r.monitor.GetPoolTxNumList(),
 	)
-	log.Resultf(r.result)
+}
+
+func (r *Replica) getTotalCommittedBlock() int {
+	lock.Lock()
+	defer lock.Unlock()
+	return r.totalCommittedMBs
 }
 
 func (r *Replica) startSignal() {
@@ -1081,6 +1137,10 @@ func (r *Replica) Start() {
 	log.Infof("Start() --- [%v] start", r.Node.ID())
 	go r.ListenLocalEvent()
 	go r.ListenCommittedBlocks()
+
+	duration := time.Duration(config.GetConfig().Duration) //监控时间 单位ms
+	interval := time.Duration(config.GetConfig().Interval) //监控频率 单位ms
+	go r.startMonitor(duration*time.Millisecond, interval*time.Millisecond)
 
 	for r.isStarted.Load() {
 		event := <-r.eventChan
