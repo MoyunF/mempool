@@ -39,7 +39,7 @@
   "signer": "ECDSA_P256",
   "pprof": false,
   "broadcastBygroup":false,
-  "broadcastBySample":true,
+  "broadcastBySample":false,
   "duration" : 50000,
   "interval" : 1000,
   "onlyworker":false,

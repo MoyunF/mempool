@@ -21,7 +21,7 @@ fi
 
 if [ -z "${SERVER_PID}" ]; then
     mkdir ./logs/$1
-    ./server -id $new_value -log_dir=./logs/$1 -log_level=INFO -log_id=$new_value -algorithm=hotstuff > program.log 2>&1 &
+    ./server -id $new_value -log_dir=./logs/$1 -log_level=DEBUG -log_id=$new_value -algorithm=hotstuff > program.log 2>&1 &
     echo $! >> ${SERVER_PID_FILE}
     echo "collab启动！"
 else

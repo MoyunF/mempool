@@ -72,6 +72,7 @@ type Proposal struct {
 	GroupList []int
 	AckNode   []map[identity.NodeID]struct{}
 	MbTime    []time.Time
+	MbList    []*MicroBlock //hotstuff中直接传小块明文
 }
 
 type PendingBlock struct {
@@ -89,7 +90,10 @@ type rawProposal struct {
 }
 
 // BuildProposal creates a signed proposal
-func BuildProposal(view types.View, qc *QC, prevID crypto.Identifier, payload []crypto.Identifier, groupList []int, ackNodeList []map[identity.NodeID]struct{}, mbTime []time.Time, proposer identity.NodeID, txNums []int) *Proposal {
+func BuildProposal(view types.View, qc *QC, prevID crypto.Identifier, payload []crypto.Identifier,
+	groupList []int, ackNodeList []map[identity.NodeID]struct{},
+	mbTime []time.Time, proposer identity.NodeID, txNums []int, mblist []*MicroBlock,
+) *Proposal {
 	p := new(Proposal)
 	p.View = view
 	p.Proposer = proposer
@@ -101,6 +105,7 @@ func BuildProposal(view types.View, qc *QC, prevID crypto.Identifier, payload []
 	p.MbTime = mbTime
 	p.makeID(proposer)
 	p.TxNums = txNums
+	p.MbList = mblist
 	return p
 }
 
@@ -248,10 +253,7 @@ func (pd *PendingBlock) AddMicroblock(mb *MicroBlock) *Block {
 }
 
 func (pd *PendingBlock) CompleteBlock() *Block {
-	if len(pd.MissingMap) == 0 {
-		return BuildBlock(pd.Proposal, pd.Payload)
-	}
-	return nil
+	return BuildBlock(pd.Proposal, pd.Payload)
 }
 
 func (pd *PendingBlock) MissingCount() int {

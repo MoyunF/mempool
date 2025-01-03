@@ -499,40 +499,6 @@ func (r *Replica) saveQuery() {
 // 只有通过客户端发送交易时，才会走这个接口的逻辑，否则observerPool
 func (r *Replica) handleTxn(m message.Transaction) {
 	r.startSignal()
-	log.Debugf("[%v] handleTxn ---  recivie tx TxID:[%v] ForwardNode:[%v] ", r.ID(), m.ID, m.NodeID)
-	m.Timestamp = time.Now()
-	isbuilt, mb := r.sm.AddTxn(&m)
-	if isbuilt {
-		log.Debugf("[%v] handleTxn --- built mb done, txs size %v", r.ID(), len(mb.Txns))
-		r.txNoInMB = len(mb.Txns)
-		mb.Sender = r.ID()
-		r.sm.AddMicroblock(mb)
-		mb.Timestamp = time.Now()
-		r.totalMicroblocks++
-		r.totalProposedMBs++
-		if config.Configuration.LoadBalance == false {
-			if r.isByz && config.Configuration.Strategy == "missing" {
-				if config.Configuration.MemType == "naive" {
-					r.Send(r.GetCurrentLeader(), mb)
-				} else if config.Configuration.MemType == "ack" {
-					r.MulticastQuorum(r.randomPick(), mb)
-
-				}
-			} else {
-				if config.Configuration.BroadcastByGroup == true {
-					groupId := mb.GroupId
-					groupList := r.gm.GetGroupListByGroupId(groupId)
-					log.Debugf("handleTxn() ---[%v] brocadcast mb [%x] to group [%v], group member list [%+v]", r.Node, mb.Hash, groupId, groupList)
-					r.BroadcastByGroup(mb, groupList) //N -> 2f+1
-				} else {
-					r.Broadcast(mb)
-				}
-			}
-		} else {
-			mb.Hops++
-			r.selfMBChan <- *mb
-		}
-	}
 	r.kickOff()
 }
 
@@ -709,10 +675,9 @@ func (r *Replica) benchmark() {
 
 func (r *Replica) kickOff() {
 	// the first leader kicks off the protocol
+	log.Debugf("view : [%v] isLeader: [%v]", r.pm.GetCurView(), r.IsLeader(r.ID(), 1))
 	if r.pm.GetCurView() == 0 && r.IsLeader(r.ID(), 1) {
-		log.Debugf("kickOff() --- [%v] ready to kick off the protocol", r.ID())
-		time.Sleep(30 * time.Second)
-		log.Debugf("kickOff() --- [%v] is going to kick off the protocol", r.ID())
+		log.Debugf("kickOff() --- kick off")
 		r.pm.AdvanceView(0)
 	}
 }
@@ -922,7 +887,15 @@ func (r *Replica) proposeBlock(view types.View) {
 	//if config.Configuration.MemType == "time" {
 	//	r.waitUntilStable(payload)
 	//}
-	log.Debugf("proposeBlock() --- for debug, payload mb time list[%v]", payload.GenerateTimeList())
+	payloadsize := config.GetConfig().PayloadSize
+	msize := config.GetConfig().MSize
+	nums := msize / payloadsize //一个微块包含多少个交易
+
+	txs := r.Pool.FetchTx(nums)
+	_, mb := r.sm.GenerateMb(txs)
+	mbList := make([]*blockchain.MicroBlock, 0)
+	mbList = append(mbList, mb)
+
 	proposal := r.Safety.MakeProposal(
 		view,
 		payload.GenerateHashList(),
@@ -930,14 +903,9 @@ func (r *Replica) proposeBlock(view types.View) {
 		payload.AckNode,
 		payload.GenerateTimeList(),
 		payload.TxNums,
+		mbList,
 	)
-	log.Debugf("proposeBlock() --- [%v] make and broadcast a proposal for view %v, containing %v microblocks, %v stable mb left, proposal id [%x]",
-		proposal.Proposer,
-		proposal.View,
-		len(proposal.HashList),
-		r.sm.RemainingMB(),
-		proposal.ID,
-	)
+	log.Infof("proposeBlock() --- [%v]generated mb [%x] for view[%v] proposalid[%x]", r.ID(), mb.Hash, proposal.View, proposal.ID)
 	r.totalBlockSize += len(proposal.HashList)
 	r.proposedNo++
 	createEnd := time.Now()
@@ -945,6 +913,10 @@ func (r *Replica) proposeBlock(view types.View) {
 	r.totalCreateDuration += createDuration
 	proposal.Timestamp = time.Now()
 	r.Broadcast(proposal)
+
+	//这里是因为，buildBlock不会存储proposal的区块，只会存储payload的区块，因此当hotstuff直接在proposal中包含交易广播，自己构建的区块中会缺少这部分交易
+	payload.MicroblockList = proposal.MbList
+
 	block := blockchain.BuildBlock(proposal, payload)
 	_ = r.Safety.ProcessBlock(block)
 	r.voteStart = time.Now()
@@ -1129,7 +1101,14 @@ func (r *Replica) Start() {
 	go r.ex.HandleMB()
 	//模拟交易
 	go r.benchmark()
-	go r.observePool()
+
+	duration := time.Duration(config.GetConfig().Duration) //监控时间 单位ms
+	interval := time.Duration(config.GetConfig().Interval) //监控频率 单位ms
+	go r.startMonitor(duration*time.Millisecond, interval*time.Millisecond)
+
+	// if r.ID().Node() == 1 {
+	// 	r.startSignal()
+	// }
 
 	// wait for the start signal
 	<-r.start
@@ -1137,10 +1116,7 @@ func (r *Replica) Start() {
 	go r.ListenLocalEvent()
 	go r.ListenCommittedBlocks()
 
-	duration := time.Duration(config.GetConfig().Duration) //监控时间 单位ms
-	interval := time.Duration(config.GetConfig().Interval) //监控频率 单位ms
-	go r.startMonitor(duration*time.Millisecond, interval*time.Millisecond)
-
+	// r.kickOff()
 	for r.isStarted.Load() {
 		event := <-r.eventChan
 		switch v := event.(type) {

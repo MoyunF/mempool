@@ -506,48 +506,8 @@ func (am *AckMem) FetchMB(p *blockchain.Proposal) *blockchain.PendingBlock {
 	defer am.mu.Unlock()
 	existingBlocks := make([]*blockchain.MicroBlock, 0)
 	missingBlocks := make(map[crypto.Identifier]struct{}, 0)
-	for index, id := range p.HashList {
-		//把相关的pending和stable都删掉
-		_, exists := am.pendingMicroblocks[id]
-		if exists {
-			delete(am.pendingMicroblocks, id)
-			log.Debugf("FetchMB() --- [%v]microblock id: %x is deleted from pending when filling", am.node.ID(), id)
-		}
-		for e := am.stableMicroblocks.Front(); e != nil; e = e.Next() {
-			// do something with e.Value
-			mb := e.Value.(*blockchain.MicroBlock)
-			if mb.Hash == id {
-				am.stableMicroblocks.Remove(e)
-				log.Debugf("FetchMB() --- [%v]microblock id: %x is deleted from stable when filling", am.node.ID(), mb.Hash)
-				break
-			}
-		}
-
-		mb, ok := am.microblockMap[id]
-		if ok {
-			log.Debugf("FetchMB() --- [%v]Porposal中的mb [%x]，在本地找到", am.node.ID(), id)
-			existingBlocks = append(existingBlocks, mb)
-		} else {
-			log.Debugf("FetchMB() --- [%v]Porposal中的mb [%x]，在本地无法找到, 构建一个假块用来给执行器用", am.node.ID(), id)
-			//在这里生成假块的时候，需要增加一些假的交易信息，这是为了方便统计已经共识的交易信息
-			//否则假块中没有交易，共识的交易数量会缺少这部分交易
-			fakeTxns := make([]*message.Transaction, 0, p.TxNums[index])
-			for i := 0; i < p.TxNums[index]; i++ {
-				tx := &message.Transaction{
-					Timestamp: time.Now(),
-				}
-				fakeTxns = append(fakeTxns, tx)
-			}
-			mb := &blockchain.MicroBlock{
-				IsFake:    true,
-				Hash:      id,
-				GroupId:   p.GroupList[index],
-				Timestamp: p.MbTime[index],
-				Txns:      fakeTxns,
-			}
-			//存疑，是否应该加入到missing中
-			existingBlocks = append(existingBlocks, mb)
-		}
+	for _, mb := range p.MbList {
+		existingBlocks = append(existingBlocks, mb)
 	}
 	return blockchain.NewPendingBlock(p, missingBlocks, existingBlocks)
 }
