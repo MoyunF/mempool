@@ -711,7 +711,6 @@ func (r *Replica) kickOff() {
 	// the first leader kicks off the protocol
 	if r.pm.GetCurView() == 0 && r.IsLeader(r.ID(), 1) {
 		log.Debugf("kickOff() --- [%v] ready to kick off the protocol", r.ID())
-		time.Sleep(30 * time.Second)
 		log.Debugf("kickOff() --- [%v] is going to kick off the protocol", r.ID())
 		r.pm.AdvanceView(0)
 	}
