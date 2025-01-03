@@ -2,7 +2,7 @@
 
 # 检查是否提供了参数
 if [ -z "$1" ]; then
-  echo "清楚输入本次实验名称"
+  echo "请提供本次实验名称"
   exit 1
 fi
 
@@ -30,15 +30,21 @@ while read -r CONTAINER_INFO; do
   if [[ $CONTAINER_NAME == mempool* ]]; then
     echo "在容器 $CONTAINER_NAME ($CONTAINER_ID) 中执行命令，id=$ID"
 
-    docker exec "$CONTAINER_ID" sh -c "cd /collab && nohup ./run.sh $EXP_ID > /dev/null 2>&1 &"
+    # 执行命令并捕获输出和错误
+    OUTPUT=$(docker exec "$CONTAINER_ID" sh -c "cd /collab && nohup ./run.sh $EXP_ID" 2>&1)
+    EXIT_CODE=$?
 
-    # 检查命令执行是否成功
-    if [ $? -ne 0 ]; then
-      echo "容器 $CONTAINER_NAME ($CONTAINER_ID) 中的命令执行失败，跳过剩余操作。"
+    # 根据命令返回值判断是否成功
+    if [ $EXIT_CODE -ne 0 ]; then
+      echo "容器 $CONTAINER_NAME ($CONTAINER_ID) 中的命令执行失败。"
+      echo "错误信息："
+      echo "$OUTPUT"
       continue
     fi
 
     echo "容器 $CONTAINER_NAME ($CONTAINER_ID) 中命令执行成功。"
+    echo "输出信息："
+    echo "$OUTPUT"
 
     # 递增 ID
     ID=$((ID + 1))

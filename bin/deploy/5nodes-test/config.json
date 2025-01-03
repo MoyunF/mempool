@@ -32,6 +32,7 @@
   "bsize": 1000,    
   "msize": 128000,  
   "memsize": 10000,  
+  "hotstuffTxSizePerBlock" : 1000,
   "fixed": false,
   "payload_size": 128,
   "delta": 1000,

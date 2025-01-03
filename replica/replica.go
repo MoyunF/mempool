@@ -887,10 +887,8 @@ func (r *Replica) proposeBlock(view types.View) {
 	//if config.Configuration.MemType == "time" {
 	//	r.waitUntilStable(payload)
 	//}
-	payloadsize := config.GetConfig().PayloadSize
-	msize := config.GetConfig().MSize
-	nums := msize / payloadsize //一个微块包含多少个交易
 
+	nums := config.Configuration.HotstuffTxSizePerBlock //一个区块包含多少个交易
 	txs := r.Pool.FetchTx(nums)
 	_, mb := r.sm.GenerateMb(txs)
 	mbList := make([]*blockchain.MicroBlock, 0)
