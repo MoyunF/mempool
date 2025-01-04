@@ -41,7 +41,7 @@
   "broadcastBygroup":false,
   "broadcastBySample":true,
   "duration" : 50000,
-  "interval" : 500,
+  "interval" : 1000,
   "onlyworker":false,
   "model":"exp2",
   "txPerSecond":1000,

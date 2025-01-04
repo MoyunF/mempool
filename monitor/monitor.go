@@ -3,8 +3,8 @@ package monitor
 import (
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"io/ioutil"
+	"strconv"
 	"sync"
 	"time"
 
@@ -22,17 +22,31 @@ import (
 */
 
 type MonitorManager struct {
+	Duration time.Duration
+	Interval time.Duration
+
 	//结果收集
-	StableNumList    []int               `json:"stable_num_list"`     //每秒stable的微块
-	ExecutedNumList  []int               `json:"executed_num_list"`   //每秒执行成功的微块数
-	CommittedNumList []int               `json:"committed_num_list"`  //每秒被共识提交的微块数
-	ReceiveTxNumList []int               `json:"receive_tx_num_list"` //每秒已经接收的交易数 （到达的，包含已经被取出的）
-	PoolTxNumList    []int               `json:"pool_tx_num_list"`    //每秒交易池中剩余的交易
-	StableTime       map[string]string   `json:"stable_time"`         //每个微块被stable的用时
-	ExecuteTime      map[string]string   `json:"execute_time"`        //每个微块执行成功的用时，此处只记录当前节点执行的mb用时，想获得全部mb的用时，需要将所有节点的记录取并集
-	CommittedTime    map[string]string   `json:"committed_time"`      //每个微块被共识提交的用时
-	ResultTime       map[string][]string `json:"result_time"`         //每个需要协作的微块收到执行完成的用时,所用时间为列表，代表来自不同节点的执行结果
-	MbReceivedTime   map[string]string   `json:"mb_received_time"`    //每个微块被节点接受的用时
+	StableNumList    []int `json:"stable_num_list"`     //每秒stable的微块
+	ExecutedNumList  []int `json:"executed_num_list"`   //每秒执行成功的微块数
+	CommittedNumList []int `json:"committed_num_list"`  //每秒被共识提交的微块数
+	ReceiveTxNumList []int `json:"receive_tx_num_list"` //每秒已经接收的交易数 （到达的，包含已经被取出的）
+	PoolTxNumList    []int `json:"pool_tx_num_list"`    //每秒交易池中剩余的交易
+
+	StableTPSList             []float64 `json:"stable_tps_list"`
+	CommittedTPSList          []float64 `json:"committed_tps_list"`
+	ExecutedTPSList           []float64 `json:"executed_tps_list"`
+	StableTpsFromBeginList    []float64 `json:"stable_tps_begin_list"`
+	CommittedTpsFromBeginList []float64 `json:"committed_tps_begin_list"`
+	ExecutedTpsFromBeginList  []float64 `json:"executed_tps_begin_list"`
+	StableDelayList           []string  `json:"stable_delay_list"`
+	CommittedDelayList        []string  `json:"committed_delay_list"`
+	ExecutedDelayList         []string  `json:"executed_delay_list"`
+
+	StableTime     map[string]string   `json:"stable_time"`      //每个微块被stable的用时
+	ExecuteTime    map[string]string   `json:"execute_time"`     //每个微块执行成功的用时，此处只记录当前节点执行的mb用时，想获得全部mb的用时，需要将所有节点的记录取并集
+	CommittedTime  map[string]string   `json:"committed_time"`   //每个微块被共识提交的用时
+	ResultTime     map[string][]string `json:"result_time"`      //每个需要协作的微块收到执行完成的用时,所用时间为列表，代表来自不同节点的执行结果
+	MbReceivedTime map[string]string   `json:"mb_received_time"` //每个微块被节点接受的用时
 }
 
 var monitorManager *MonitorManager = nil
@@ -56,6 +70,14 @@ func NewMonitorManager() *MonitorManager {
 		monitorManager.CommittedTime = make(map[string]string)  //每个微块被共识提交的用时
 		monitorManager.ResultTime = make(map[string][]string)   //微块对应result被接受的用时
 		monitorManager.MbReceivedTime = make(map[string]string) //mb被接收的用时
+
+		monitorManager.StableTPSList = make([]float64, 0)
+		monitorManager.CommittedTPSList = make([]float64, 0)
+		monitorManager.ExecutedTPSList = make([]float64, 0)
+		monitorManager.StableDelayList = make([]string, 0)
+		monitorManager.CommittedDelayList = make([]string, 0)
+		monitorManager.ExecutedDelayList = make([]string, 0)
+
 		log.Debugf("监控器初始化成功 --- %v", monitorManager)
 		return monitorManager
 	}
@@ -95,6 +117,125 @@ func (m *MonitorManager) CollectePoolTxNum(poolTxNum int) {
 	mu.Lock()
 	defer mu.Unlock()
 	m.PoolTxNumList = append(m.ReceiveTxNumList, poolTxNum)
+}
+
+//tps = （当前交易 - 上一时刻交易） / （当前时刻 - 上一时刻）
+func (m *MonitorManager) CollectStableTPS() {
+	mu.Lock()
+	defer mu.Unlock()
+	slot := m.Interval
+	for index, value := range m.StableNumList {
+		if index == 0 {
+			tps := float64(value) / slot.Seconds()
+			m.StableTPSList = append(m.StableTPSList, tps)
+		} else {
+			currentNum := float64(value)
+			beforeNum := float64(m.StableNumList[index-1])
+			if slot.Seconds() != 0 {
+				tps := (currentNum - beforeNum) / slot.Seconds()
+				m.StableTPSList = append(m.StableTPSList, tps)
+			} else {
+				m.StableTPSList = append(m.StableTPSList, 0)
+			}
+		}
+	}
+}
+
+//tps = （当前交易 - 上一时刻交易） / （当前时刻 - 上一时刻）
+func (m *MonitorManager) CollectCommittedTPS() {
+	mu.Lock()
+	defer mu.Unlock()
+	slot := m.Interval
+	for index, value := range m.CommittedNumList {
+		if index == 0 {
+			tps := float64(value) / slot.Seconds()
+			m.CommittedTPSList = append(m.CommittedTPSList, tps)
+		} else {
+			currentNum := float64(value)
+			beforeNum := float64(m.CommittedNumList[index-1])
+			if slot.Seconds() != 0 {
+				tps := (currentNum - beforeNum) / slot.Seconds()
+				m.CommittedTPSList = append(m.CommittedTPSList, tps)
+			} else {
+				m.CommittedTPSList = append(m.CommittedTPSList, 0)
+			}
+		}
+	}
+}
+
+func (m *MonitorManager) CollectExecutedTPS() {
+	mu.Lock()
+	defer mu.Unlock()
+	slot := m.Interval
+	for index, value := range m.ExecutedNumList {
+		if index == 0 {
+			tps := float64(value) / slot.Seconds()
+			m.ExecutedTPSList = append(m.ExecutedTPSList, tps)
+		} else {
+			currentNum := float64(value)
+			beforeNum := float64(m.ExecutedNumList[index-1])
+			if slot.Seconds() != 0 {
+				tps := (currentNum - beforeNum) / slot.Seconds()
+				m.ExecutedTPSList = append(m.ExecutedTPSList, tps)
+			} else {
+				m.ExecutedTPSList = append(m.ExecutedTPSList, 0)
+			}
+
+		}
+	}
+}
+
+//tps = （当前交易 - 上一时刻交易） / （当前时刻 - 上一时刻）
+func (m *MonitorManager) CollectStableTPSFromBegin() {
+	mu.Lock()
+	defer mu.Unlock()
+	for index, value := range m.StableNumList {
+		time := float64(index+1) * m.Interval.Seconds()
+		if time != 0 {
+			m.StableTpsFromBeginList = append(m.StableTpsFromBeginList, float64(value)/time)
+		}
+	}
+}
+
+//tps = （当前交易 - 上一时刻交易） / （当前时刻 - 上一时刻）
+func (m *MonitorManager) CollectCommittedTPSFromBegin() {
+	mu.Lock()
+	defer mu.Unlock()
+	for index, value := range m.CommittedNumList {
+		time := float64(index+1) * m.Interval.Seconds()
+		if time != 0 {
+			m.CommittedTpsFromBeginList = append(m.CommittedTpsFromBeginList, float64(value)/time)
+		}
+	}
+}
+
+func (m *MonitorManager) CollectExecutedTPSFromBegin() {
+	mu.Lock()
+	defer mu.Unlock()
+	for index, value := range m.ExecutedNumList {
+		time := float64(index+1) * m.Interval.Seconds()
+		if time != 0 {
+			m.ExecutedTpsFromBeginList = append(m.ExecutedTpsFromBeginList, float64(value)/time)
+		}
+	}
+}
+
+func (m *MonitorManager) CollectStableDelay() {
+	mu.Lock()
+	defer mu.Unlock()
+	m.StableDelayList = append(m.StableDelayList, m.mean(m.StableTime))
+}
+
+func (m *MonitorManager) CollectCommittedDelay() {
+	mu.Lock()
+	defer mu.Unlock()
+	m.CommittedDelayList = append(m.CommittedDelayList, m.mean(m.CommittedTime))
+}
+
+func (m *MonitorManager) CollectExecutedDelay() {
+	mu.Lock()
+	defer mu.Unlock()
+	m.ExecutedDelayList = append(m.ExecutedDelayList, m.mean(m.ExecuteTime))
 }
 
 // mb stable所用时间
@@ -247,5 +388,47 @@ func (m *MonitorManager) durationToMs(duration time.Duration) string {
 	milliseconds := float64(duration) / float64(time.Millisecond)
 
 	// 打印毫秒数
-	return fmt.Sprintf("%.3f", milliseconds)
+	return strconv.FormatFloat(milliseconds, 'f', -1, 64)
+}
+
+//对所有的ms时间求平均，返回平均时延，单位ms
+func (m *MonitorManager) mean(timeTable map[string]string) string {
+	var sum float64 = 0.0
+	var num float64 = 0.0
+	for _, v := range timeTable {
+		time, _ := strconv.ParseFloat(v, 64)
+		sum += time
+		num += 1
+	}
+	if num != 0 {
+		return strconv.FormatFloat(sum/num, 'f', -1, 64)
+	}
+	return "0"
+}
+
+//对所有的ms时间求平均，返回平均时延，单位ms
+func (m *MonitorManager) meanForExecuted(timeTable map[string][]string) string {
+	var sum float64 = 0.0
+	var num float64 = 0.0
+	for _, v := range timeTable {
+		var sum_1 float64 = 0.0
+		var num_1 float64 = 0.0
+		var time float64 = 0.0
+		for _, num := range v {
+			temp, _ := strconv.ParseFloat(num, 64)
+			sum_1 += temp
+			num_1 += 1
+		}
+		if num_1 != 0 {
+			time = sum_1
+		} else {
+			time = sum_1 / num_1
+		}
+		sum += time
+		num += 1
+	}
+	if num != 0 {
+		return strconv.FormatFloat(sum/num, 'f', -1, 64)
+	}
+	return "0"
 }
