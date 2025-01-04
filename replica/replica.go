@@ -4,6 +4,7 @@ import (
 	"encoding/gob"
 	"fmt"
 	"math/rand"
+	"os"
 	"sync"
 	"time"
 
@@ -1036,6 +1037,8 @@ func (r *Replica) startMonitor(duration time.Duration, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
+	r.monitor.Duration = duration
+	r.monitor.Interval = interval
 	endTime := time.Now().Add(duration) // 计算结束时间
 	log.Infof("startMonitor() --- Monitoring started. Duration: %v s, Interval: %v s", duration.Seconds(), interval.Seconds())
 
@@ -1056,13 +1059,23 @@ func (r *Replica) startMonitor(duration time.Duration, interval time.Duration) {
 	id := fmt.Sprint(r.ID())                                     //节点id
 	groupNum := fmt.Sprint(config.Configuration.GroupNum)        //分组数
 	payloadSize := fmt.Sprint(config.Configuration.PayloadSize)  //交易大侠
-	time := fmt.Sprint(config.Configuration.Time)
+	benchTime := fmt.Sprint(config.Configuration.Time)
+
+	now := time.Now()
+	timestamp := fmt.Sprintf("%v", now.Format("20060102_150405"))
+	//TODO:hotstuff的文件保存路径
+
+	err := os.MkdirAll("./result", os.ModePerm)
+	if err != nil {
+		log.Fatalf("failed to create directory: %v", err)
+	}
+
 	if config.Configuration.BroadcastByGroup {
-		filePath = "./logs/ID" + id + "-N" + nodesNum + "-Threshold" + threshold + "-Tx" + txPerSecond + "-txSize" + payloadSize + "-Time" + time + "-Gnum" + groupNum + "-group" + "-duration" + duration.String() + "-interval" + interval.String() + ".json"
+		filePath = "./result/ID" + id + "-N" + nodesNum + "-Threshold" + threshold + "-Tx" + txPerSecond + "-txSize" + payloadSize + "-BenchTime" + benchTime + "-Gnum" + groupNum + "-group" + "-duration" + duration.String() + "-interval" + interval.String() + "-" + timestamp + ".json"
 	} else if config.Configuration.BroadcastBySample {
-		filePath = "./logs/ID" + id + "-N" + nodesNum + "-Threshold" + threshold + "-Tx" + txPerSecond + "-txSize" + payloadSize + "-Time" + time + "-sample" + "-duration" + duration.String() + "-interval" + interval.String() + ".json"
+		filePath = "./result/ID" + id + "-N" + nodesNum + "-Threshold" + threshold + "-Tx" + txPerSecond + "-txSize" + payloadSize + "-BenchTime" + benchTime + "-sample" + "-duration" + duration.String() + "-interval" + interval.String() + "-" + timestamp + ".json"
 	} else {
-		filePath = "./logs/ID" + id + "-N" + nodesNum + "-Threshold" + threshold + "-Tx" + txPerSecond + "-txSize" + payloadSize + "-Time" + time + "-stratus" + "-duration" + duration.String() + "-interval" + interval.String() + ".json"
+		filePath = "./result/ID" + id + "-N" + nodesNum + "-Threshold" + threshold + "-Tx" + txPerSecond + "-txSize" + payloadSize + "-BenchTime" + benchTime + "-stratus" + "-duration" + duration.String() + "-interval" + interval.String() + "-" + timestamp + ".json"
 	}
 	r.monitor.SaveResult(filePath)
 }
@@ -1090,6 +1103,19 @@ func (r *Replica) collectData() {
 	r.monitor.CollectExecutedNum(r.ex.TotalNum())
 	r.monitor.CollectReceiveTxNum(r.Pool.ReceiveNum())
 	r.monitor.CollectePoolTxNum(r.Pool.TxLen())
+
+	r.monitor.CollectStableTPS()
+	r.monitor.CollectStableTPSFromBegin()
+	r.monitor.CollectStableDelay()
+
+	r.monitor.CollectCommittedTPS()
+	r.monitor.CollectCommittedTPSFromBegin()
+	r.monitor.CollectCommittedDelay()
+
+	r.monitor.CollectExecutedTPS()
+	r.monitor.CollectExecutedTPSFromBegin()
+	r.monitor.CollectExecutedDelay()
+
 	log.Infof("collectData() --- [%v] 已收集[%v]的数据", r.ID(), time.Now())
 	log.Debugf("collectData() --- [%v]: stableNUM:[%v],committedNum:[%v],executedNum:[%v],receiveTxNum:[%v],poolTxNum:[%v]",
 		r.ID(),
