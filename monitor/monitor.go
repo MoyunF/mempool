@@ -3,7 +3,6 @@ package monitor
 import (
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"io/ioutil"
 	"strconv"
 	"sync"
@@ -33,15 +32,15 @@ type MonitorManager struct {
 	ReceiveTxNumList []int `json:"receive_tx_num_list"` //每秒已经接收的交易数 （到达的，包含已经被取出的）
 	PoolTxNumList    []int `json:"pool_tx_num_list"`    //每秒交易池中剩余的交易
 
-	StableTPSList             []float64
-	CommittedTPSList          []float64
-	ExecutedTPSList           []float64
-	StableTpsFromBeginList    []float64
-	CommittedTpsFromBeginList []float64
-	ExecutedTpsFromBeginList  []float64
-	StableDelayList           []string
-	CommittedDelayList        []string
-	ExecutedDelayList         []string
+	StableTPSList             []float64 `json:"stable_tps_list"`
+	CommittedTPSList          []float64 `json:"committed_tps_list"`
+	ExecutedTPSList           []float64 `json:"executed_tps_list"`
+	StableTpsFromBeginList    []float64 `json:"stable_tps_begin_list"`
+	CommittedTpsFromBeginList []float64 `json:"committed_tps_begin_list"`
+	ExecutedTpsFromBeginList  []float64 `json:"executed_tps_begin_list"`
+	StableDelayList           []string  `json:"stable_delay_list"`
+	CommittedDelayList        []string  `json:"committed_delay_list"`
+	ExecutedDelayList         []string  `json:"executed_delay_list"`
 
 	StableTime     map[string]string   `json:"stable_time"`      //每个微块被stable的用时
 	ExecuteTime    map[string]string   `json:"execute_time"`     //每个微块执行成功的用时，此处只记录当前节点执行的mb用时，想获得全部mb的用时，需要将所有节点的记录取并集
@@ -389,7 +388,7 @@ func (m *MonitorManager) durationToMs(duration time.Duration) string {
 	milliseconds := float64(duration) / float64(time.Millisecond)
 
 	// 打印毫秒数
-	return fmt.Sprintf("%.3f", milliseconds)
+	return strconv.FormatFloat(milliseconds, 'f', -1, 64)
 }
 
 //对所有的ms时间求平均，返回平均时延，单位ms
@@ -402,7 +401,34 @@ func (m *MonitorManager) mean(timeTable map[string]string) string {
 		num += 1
 	}
 	if num != 0 {
-		return strconv.FormatFloat(sum/num, 'E', -1, 64)
+		return strconv.FormatFloat(sum/num, 'f', -1, 64)
+	}
+	return "0"
+}
+
+//对所有的ms时间求平均，返回平均时延，单位ms
+func (m *MonitorManager) meanForExecuted(timeTable map[string][]string) string {
+	var sum float64 = 0.0
+	var num float64 = 0.0
+	for _, v := range timeTable {
+		var sum_1 float64 = 0.0
+		var num_1 float64 = 0.0
+		var time float64 = 0.0
+		for _, num := range v {
+			temp, _ := strconv.ParseFloat(num, 64)
+			sum_1 += temp
+			num_1 += 1
+		}
+		if num_1 != 0 {
+			time = sum_1
+		} else {
+			time = sum_1 / num_1
+		}
+		sum += time
+		num += 1
+	}
+	if num != 0 {
+		return strconv.FormatFloat(sum/num, 'f', -1, 64)
 	}
 	return "0"
 }
