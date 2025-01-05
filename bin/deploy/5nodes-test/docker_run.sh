@@ -13,7 +13,7 @@ BASE_IP="172.18.0."
 START_IP=2
 
 # 容器数量
-CONTAINER_COUNT=5
+CONTAINER_COUNT=64
 
 # 挂载的端口号
 HTTP_PORT=8070
@@ -32,7 +32,7 @@ for i in $(seq 1 $CONTAINER_COUNT); do
         --privileged \
         -it \
         -p $((HTTP_PORT+i-1)):8070 \
-        -v ./local_logs:/collab/logs \
+        -v ./:/collab \
         $IMAGE_NAME \
         /bin/bash -c "export TERM=xterm && service ssh start && top"
 

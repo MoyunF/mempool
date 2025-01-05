@@ -23,28 +23,31 @@ EXP_ID=$1
 
 # 遍历容器并执行命令
 while read -r CONTAINER_INFO; do
-  CONTAINER_ID=$(echo "$CONTAINER_INFO" | awk '{print $1}')
-  CONTAINER_NAME=$(echo "$CONTAINER_INFO" | awk '{print $2}')
+  {
+    CONTAINER_ID=$(echo "$CONTAINER_INFO" | awk '{print $1}')
+    CONTAINER_NAME=$(echo "$CONTAINER_INFO" | awk '{print $2}')
 
-  # 仅处理容器名称以 mempool 开头的
-  if [[ $CONTAINER_NAME == mempool* ]]; then
-    echo "在容器 $CONTAINER_NAME ($CONTAINER_ID) 中执行命令，id=$ID"
+    # 仅处理容器名称以 mempool 开头的
+    if [[ $CONTAINER_NAME == mempool* ]]; then
+      echo "在容器 $CONTAINER_NAME ($CONTAINER_ID) 中执行命令，id=$ID"
 
-    docker exec "$CONTAINER_ID" sh -c "cd /collab && nohup ./run.sh $EXP_ID > /dev/null 2>&1 &"
+      docker exec "$CONTAINER_ID" sh -c "cd /collab && nohup ./run.sh $EXP_ID > /dev/null 2>&1 &"
 
-    # 检查命令执行是否成功
-    if [ $? -ne 0 ]; then
-      echo "容器 $CONTAINER_NAME ($CONTAINER_ID) 中的命令执行失败，跳过剩余操作。"
-      continue
+      # 检查命令执行是否成功
+      if [ $? -ne 0 ]; then
+        echo "容器 $CONTAINER_NAME ($CONTAINER_ID) 中的命令执行失败，跳过剩余操作。"
+        continue
+      fi
+
+      echo "容器 $CONTAINER_NAME ($CONTAINER_ID) 中命令执行成功。"
+
+      # 递增 ID
+      ID=$((ID + 1))
+    else
+      echo "跳过容器 $CONTAINER_NAME ($CONTAINER_ID)，因为名称不匹配。"
     fi
-
-    echo "容器 $CONTAINER_NAME ($CONTAINER_ID) 中命令执行成功。"
-
-    # 递增 ID
-    ID=$((ID + 1))
-  else
-    echo "跳过容器 $CONTAINER_NAME ($CONTAINER_ID)，因为名称不匹配。"
-  fi
+  }
+  wait
 
 done <<< "$CONTAINERS"
 

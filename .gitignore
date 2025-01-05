@@ -27,3 +27,8 @@ server.*.log
 .DS_Store
 server/server
 server/server
+bin/deploy/5nodes-test/result/
+bin/deploy/5nodes-test/logs/
+bin/deploy/5nodes-test/local_logs/
+bin/deploy/5nodes-test/server
+bin/deploy/5nodes-test/program.log

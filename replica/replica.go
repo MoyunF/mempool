@@ -1146,6 +1146,10 @@ func (r *Replica) startSignal() {
 // Start starts event loop
 func (r *Replica) Start() {
 
+	waitSecond := 15
+	log.Infof("Start() --- [%v] wait other nodes start for %v", r.ID(), waitSecond)
+	time.Sleep(time.Duration(waitSecond) * time.Second)
+
 	go r.Run()
 	//go r.gossip()
 	go r.loadbalance() //负载均衡用
