@@ -71,4 +71,8 @@ type SharedMempool interface {
 	StableMB() int64
 
 	PendingMB() int64
+
+	GetStablePerRound() int
+
+	ResetStablePerRound()
 }

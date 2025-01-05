@@ -44,6 +44,8 @@ type AckMem struct {
 	gm                 *group.GroupManager
 	node               node.Node
 	monitor            *monitor.MonitorManager
+
+	StablePerRound int //用来控制微块发送速度
 }
 
 type PendingMicroblock struct {
@@ -189,6 +191,7 @@ func (am *AckMem) AddMicroblock(mb *blockchain.MicroBlock) error {
 				am.stableMicroblocks.PushBack(mb)
 				am.stableMBs[mb.Hash] = struct{}{}
 				am.TotalStableMbs++
+				am.StablePerRound++
 				am.TotalStableDelay += time.Now().Sub(mb.Timestamp)
 				delete(am.pendingMicroblocks, mb.Hash)
 				log.Debugf("AddMircoblock () --- [%v] mb's hash: %x becomes stable from buffer", am.node.ID(), mb.Hash)
@@ -237,6 +240,7 @@ func (am *AckMem) AddAck(ack *blockchain.Ack) {
 				am.stableMicroblocks.PushBack(target.microblock)
 				am.stableMBs[target.microblock.Hash] = struct{}{}
 				am.TotalStableMbs++
+				am.StablePerRound++
 				am.TotalStableDelay += time.Now().Sub(target.microblock.Timestamp)
 				delete(am.pendingMicroblocks, ack.MicroblockID)
 				//构建stable信息
@@ -298,6 +302,7 @@ func (am *AckMem) AddStable(stable *blockchain.Stable) {
 		am.stableMicroblocks.PushBack(target.microblock)
 		am.stableMBs[target.microblock.Hash] = struct{}{}
 		am.TotalStableMbs++
+		am.StablePerRound++
 		am.TotalStableDelay += time.Now().Sub(target.microblock.Timestamp)
 		delete(am.pendingMicroblocks, stable.MicroblockID)
 	}
@@ -327,6 +332,7 @@ func (am *AckMem) AddStable(stable *blockchain.Stable) {
 		am.stableMBs[mb.Hash] = struct{}{}
 
 		am.TotalStableMbs++
+		am.StablePerRound++
 		am.TotalStableDelay += time.Now().Sub(mb.Timestamp)
 
 		am.microblockMap[mb.Hash] = mb //变量逃逸
@@ -677,6 +683,18 @@ func (am *AckMem) RemainingMB() int64 {
 	am.mu.Lock()
 	defer am.mu.Unlock()
 	return int64(len(am.pendingMicroblocks) + am.stableMicroblocks.Len())
+}
+
+func (am *AckMem) GetStablePerRound() int {
+	am.mu.Lock()
+	defer am.mu.Unlock()
+	return am.StablePerRound
+}
+
+func (am *AckMem) ResetStablePerRound() {
+	am.mu.Lock()
+	defer am.mu.Unlock()
+	am.StablePerRound = 0
 }
 
 func (am *AckMem) AckList(id crypto.Identifier) []identity.NodeID {

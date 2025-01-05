@@ -226,6 +226,13 @@ func (r *Replica) HandleStable(stable blockchain.Stable) {
 	log.Debugf("HandleStable() --- [%v] receive a stable from [%v], mb's hash[%x]", r.ID(),
 		stable.Sender, stable.MicroblockID)
 	r.sm.AddStable(&stable)
+
+	sendThreshold := config.Configuration.Q
+	if r.sm.GetStablePerRound() >= sendThreshold {
+		log.Debugf("HandleStable() --- [%v] 已经接受了 [%v] 个上一轮的mb，开始下一轮广播", r.ID(), r.sm.GetStablePerRound())
+		r.sm.ResetStablePerRound()
+		r.mbBroadcast <- struct{}{}
+	}
 }
 
 // HandleMicroblock handles microblocks from replicas
@@ -548,7 +555,7 @@ func (r *Replica) observePool() {
 			for i := 0; i < config.GetConfig().Mb_broadcast; i++ {
 				r.mbBroadcast <- struct{}{}
 			}
-			time.Sleep(3 * time.Second)
+			time.Sleep(60 * time.Second)
 		}
 	}()
 

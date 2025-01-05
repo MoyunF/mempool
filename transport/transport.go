@@ -53,8 +53,8 @@ func NewTransport(addr string) Transport {
 
 	transport := &transport{
 		uri:   uri,
-		send:  make(chan interface{}, 1024),
-		recv:  make(chan interface{}, 1024),
+		send:  make(chan interface{}, 102400),
+		recv:  make(chan interface{}, 102400),
 		close: make(chan struct{}),
 	}
 
@@ -170,11 +170,35 @@ func (t *tcp) Listen() {
 				continue
 			}
 
-			go func(conn net.Conn) {
-				// codec := NewCodec(config.Codec, conn)
+			// 使用远程地址作为协程标识符
+			connName := conn.RemoteAddr().String()
+			// 每个协程维护一个接收的数据量
+			var dataReceived int64
+			// 使用互斥锁来确保线程安全
+			var mu sync.Mutex
+
+			go func(conn net.Conn, connName string) {
+				// 创建解码器
 				decoder := gob.NewDecoder(conn)
 				defer conn.Close()
-				//r := bufio.NewReader(conn)
+
+				// 定时打印接收的数据量
+				ticker := time.NewTicker(5 * time.Second)
+				defer ticker.Stop()
+
+				// 启动协程，定期打印接收到的数据量
+				go func() {
+					for {
+						select {
+						case <-ticker.C:
+							// 加锁来安全访问 dataReceived
+							mu.Lock()
+							log.Debugf("协程 %s 当前接收到的数据量: %d bytes", connName, dataReceived)
+							mu.Unlock()
+						}
+					}
+				}()
+
 				for {
 					select {
 					case <-t.close:
@@ -183,19 +207,30 @@ func (t *tcp) Listen() {
 						var m interface{}
 						err := decoder.Decode(&m)
 						if err != nil {
-							log.Error(err)
-							log.Error(&m)
-							log.Debugf("%v", conn.RemoteAddr().String())
-							continue
+							if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+								log.Warningf("Read timeout from %s", conn.RemoteAddr().String())
+								time.Sleep(1 * time.Second)
+								continue
+							}
+							log.Errorf("Decode error: %v", err)
+							return
 						}
-						t.recv <- m
+
+						// 增加接收的数据量
 						var buf bytes.Buffer
 						enc := gob.NewEncoder(&buf)
 						enc.Encode(&m)
+
+						// 加锁来安全修改 dataReceived
+						mu.Lock()
+						dataReceived += int64(buf.Len()) // 增加接收的数据量
+						mu.Unlock()
+
+						t.recv <- m
 						t.totalRecvBits += int64(buf.Len()) * 8
 					}
 				}
-			}(conn)
+			}(conn, connName)
 		}
 	}(listener)
 }
