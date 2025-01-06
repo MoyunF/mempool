@@ -18,7 +18,7 @@ echo "================== Step 1: 编译 Go 程序 =================="
 
 # 进入 Go 源代码目录，编译程序
 pushd "$GO_SOURCE_DIR" > /dev/null
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o ../bin/deploy/5nodes-test/server
+CGO_ENABLED=1 GOOS=linux GOARCH=amd64 GOFLAGs="-race" go build -o ../bin/deploy/5nodes-test/server
 if [ $? -ne 0 ]; then
   echo "❌ Go 程序编译失败！"
   exit 1

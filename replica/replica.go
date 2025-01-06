@@ -31,6 +31,9 @@ import (
 	"github.com/gitferry/bamboo/node"
 	"github.com/gitferry/bamboo/pacemaker"
 	"github.com/gitferry/bamboo/types"
+
+	"net/http"
+	_ "net/http/pprof" // 导入 pprof 包，它会自动初始化 pprof 路由
 )
 
 type Replica struct {
@@ -240,69 +243,69 @@ func (r *Replica) HandleStable(stable blockchain.Stable) {
 // it first checks if the relevant proposal is pending
 // if so, tries to complete the block
 func (r *Replica) HandleMicroblock(mb blockchain.MicroBlock) {
-	r.startSignal()
-	// gossip
-	//if a quorum of acks is not reached, gossip the microblock
-	go func() {
-		if config.Configuration.Gossip == true && !mb.IsRequested && r.ID() != config.Configuration.Master {
-			mb.Hops++
-			if mb.Hops <= config.Configuration.R {
-				r.otherMBChan <- mb
-			}
-		}
-	}()
-	if config.Configuration.LoadBalance && mb.IsForward {
-		mb.IsForward = false
-		r.Broadcast(mb)
-		return
-	}
-	_, ok := r.receivedMBs[mb.Hash]
-	if ok {
-		r.totalRedundantMBs++
-		return
-	}
-	defer r.kickOff()
-	if config.GetConfig().BroadcastByGroup == true && r.gm.IsInMyGroup(mb.GroupId) {
-		r.totaRealDissminationTime += time.Now().Sub(mb.Timestamp)
-		r.totalRealMBS++
-	}
-	r.totalDisseminationTime += time.Now().Sub(mb.Timestamp)
-	if mb.Sender.Node() <= config.Configuration.SlowNo {
-		r.totalSlowDisemminationDur += time.Now().Sub(mb.Timestamp)
-		r.totalSlowMBs++
-	}
-	r.receivedMBs[mb.Hash] = struct{}{}
-	r.totalMicroblocks++
-	mb.FutureTimestamp = time.Now()
+	// r.startSignal()
+	// // gossip
+	// //if a quorum of acks is not reached, gossip the microblock
+	// go func() {
+	// 	if config.Configuration.Gossip == true && !mb.IsRequested && r.ID() != config.Configuration.Master {
+	// 		mb.Hops++
+	// 		if mb.Hops <= config.Configuration.R {
+	// 			r.otherMBChan <- mb
+	// 		}
+	// 	}
+	// }()
+	// if config.Configuration.LoadBalance && mb.IsForward {
+	// 	mb.IsForward = false
+	// 	r.Broadcast(mb)
+	// 	return
+	// }
+	// _, ok := r.receivedMBs[mb.Hash]
+	// if ok {
+	// 	r.totalRedundantMBs++
+	// 	return
+	// }
+	// defer r.kickOff()
+	// if config.GetConfig().BroadcastByGroup == true && r.gm.IsInMyGroup(mb.GroupId) {
+	// 	r.totaRealDissminationTime += time.Now().Sub(mb.Timestamp)
+	// 	r.totalRealMBS++
+	// }
+	// r.totalDisseminationTime += time.Now().Sub(mb.Timestamp)
+	// if mb.Sender.Node() <= config.Configuration.SlowNo {
+	// 	r.totalSlowDisemminationDur += time.Now().Sub(mb.Timestamp)
+	// 	r.totalSlowMBs++
+	// }
+	// r.receivedMBs[mb.Hash] = struct{}{}
+	// r.totalMicroblocks++
+	// mb.FutureTimestamp = time.Now()
 
-	log.Debugf("HandleMircoblock() --- [%v] received a microblock from [%v], mb's hash: %x", r.ID(), mb.Sender, mb.Hash)
-	// proposalID, exists := r.missingMBs[mb.Hash]
-	if mb.IsRequested {
-		//是丢失块,调用丢失处理逻辑 TODO:处理丢失请求的函数
-		log.Debugf("HandleMircoblock() --- [%v] a missing mb is found, mb's hash:[%x]", r.ID(), mb.Hash)
-		r.sm.HandleMissingStableMb(&mb)
-		r.ex.MissReceive <- &mb
-	} else {
-		err := r.sm.AddMicroblock(&mb)
-		if err != nil {
-			log.Errorf("HandleMircoblock() ---[%v] can not add a microblock, mb's hash: %x", r.ID(), mb.Hash)
-		}
-		// ack
-		if !mb.IsRequested && config.Configuration.MemType == "ack" {
-			ack := blockchain.MakeAck(r.ID(), mb.Hash)
-			if config.GetConfig().BroadcastByGroup == true && !r.gm.IsInMyGroup(mb.GroupId) {
-				log.Debugf("HandleMircoblock() --- [%v] recieved a outgroup mb, mb'hash [%x], ignore", r.ID(), mb.Hash)
-				ack.OutGroup = true
-			}
-			if mb.Sender != r.ID() {
-				log.Debugf("HandleMircoblock() --- [%v] receive a mb, reply ack to [%v], mb's hash [%x]", r.ID(), mb.Sender, mb.Hash)
-				r.Send(mb.Sender, blockchain.MakeAck(r.ID(), mb.Hash))
-				r.monitor.CollectMbReceiveTime(mb.Hash, time.Now().Sub(mb.CreateTimeStamp))
-			} else {
-				r.HandleAck(*ack)
-			}
-		}
-	}
+	// log.Debugf("HandleMircoblock() --- [%v] received a microblock from [%v], mb's hash: %x", r.ID(), mb.Sender, mb.Hash)
+	// // proposalID, exists := r.missingMBs[mb.Hash]
+	// if mb.IsRequested {
+	// 	//是丢失块,调用丢失处理逻辑 TODO:处理丢失请求的函数
+	// 	log.Debugf("HandleMircoblock() --- [%v] a missing mb is found, mb's hash:[%x]", r.ID(), mb.Hash)
+	// 	r.sm.HandleMissingStableMb(&mb)
+	// 	r.ex.MissReceive <- &mb
+	// } else {
+	// 	err := r.sm.AddMicroblock(&mb)
+	// 	if err != nil {
+	// 		log.Errorf("HandleMircoblock() ---[%v] can not add a microblock, mb's hash: %x", r.ID(), mb.Hash)
+	// 	}
+	// 	// ack
+	// 	if !mb.IsRequested && config.Configuration.MemType == "ack" {
+	// 		ack := blockchain.MakeAck(r.ID(), mb.Hash)
+	// 		if config.GetConfig().BroadcastByGroup == true && !r.gm.IsInMyGroup(mb.GroupId) {
+	// 			log.Debugf("HandleMircoblock() --- [%v] recieved a outgroup mb, mb'hash [%x], ignore", r.ID(), mb.Hash)
+	// 			ack.OutGroup = true
+	// 		}
+	// 		if mb.Sender != r.ID() {
+	// 			log.Debugf("HandleMircoblock() --- [%v] receive a mb, reply ack to [%v], mb's hash [%x]", r.ID(), mb.Sender, mb.Hash)
+	// 			r.Send(mb.Sender, blockchain.MakeAck(r.ID(), mb.Hash))
+	// 			r.monitor.CollectMbReceiveTime(mb.Hash, time.Now().Sub(mb.CreateTimeStamp))
+	// 		} else {
+	// 			r.HandleAck(*ack)
+	// 		}
+	// 	}
+	// }
 }
 
 func (r *Replica) HandleMissingMBRequest(mbr message.MissingMBRequest) {
@@ -556,7 +559,7 @@ func (r *Replica) observePool() {
 			for i := 0; i < config.GetConfig().Mb_broadcast; i++ {
 				r.mbBroadcast <- struct{}{}
 			}
-			time.Sleep(1 * time.Second)
+			time.Sleep(100 * time.Millisecond)
 		}
 	}()
 
@@ -884,7 +887,7 @@ func (r *Replica) processNewView(newView types.View) {
 	if !r.IsLeader(r.ID(), newView) {
 		return
 	}
-	r.proposeBlock(newView)
+	//r.proposeBlock(newView)
 }
 
 func (r *Replica) processAcks(ack *blockchain.Ack) {
@@ -1153,10 +1156,12 @@ func (r *Replica) startSignal() {
 
 // Start starts event loop
 func (r *Replica) Start() {
-
 	waitSecond := 15
 	log.Infof("Start() --- [%v] wait other nodes start for %v", r.ID(), waitSecond)
 	time.Sleep(time.Duration(waitSecond) * time.Second)
+	go func() {
+		http.ListenAndServe("localhost:6060", nil) // 启动 pprof 服务器
+	}()
 
 	go r.Run()
 	//go r.gossip()

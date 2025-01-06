@@ -65,26 +65,29 @@ type socket struct {
 	slow       map[identity.NodeID]int
 	flaky      map[identity.NodeID]float64
 
+	conncurrentLimit chan struct{}
+
 	lock sync.RWMutex // locking map nodes
 }
 
 // NewSocket return Socket interface instance given self NodeID, node list, transport and codec name
 func NewSocket(id identity.NodeID, addrs map[identity.NodeID]string, addrs2 map[identity.NodeID]string) Socket {
 	socket := &socket{
-		id:         id,
-		addresses:  addrs,
-		addresses2: addrs2,
-		nodes:      make(map[identity.NodeID]transport.Transport),
-		nodes2:     make(map[identity.NodeID]transport.Transport),
-		crash:      false,
-		drop:       make(map[identity.NodeID]bool),
-		slow:       make(map[identity.NodeID]int),
-		flaky:      make(map[identity.NodeID]float64),
+		id:               id,
+		addresses:        addrs,
+		addresses2:       addrs2,
+		nodes:            make(map[identity.NodeID]transport.Transport),
+		nodes2:           make(map[identity.NodeID]transport.Transport),
+		crash:            false,
+		drop:             make(map[identity.NodeID]bool),
+		slow:             make(map[identity.NodeID]int),
+		flaky:            make(map[identity.NodeID]float64),
+		conncurrentLimit: make(chan struct{}, 7),
 	}
 
-	socket.nodes[id] = transport.NewTransport(addrs[id])
+	socket.nodes[id] = transport.NewTransport(addrs[id], socket.conncurrentLimit)
 	socket.nodes[id].Listen()
-	socket.nodes2[id] = transport.NewTransport(addrs2[id])
+	socket.nodes2[id] = transport.NewTransport(addrs2[id], socket.conncurrentLimit)
 	socket.nodes2[id].Listen()
 	return socket
 }
@@ -105,6 +108,10 @@ func (s *socket) RecvRate() float64 {
 
 func (s *socket) Send(to identity.NodeID, m interface{}) {
 	//log.Debugf("node %s send message %+v to %v", s.id, m, to)
+	s.lock.RLock()
+	log.Debugf("Send() --- fetch a send token, 当前正在发送的有%v协程", len(s.conncurrentLimit))
+	s.lock.RUnlock()
+	s.conncurrentLimit <- struct{}{}
 
 	// 深拷贝消息
 	clonedMessage, err := DeepCopy(m)
@@ -133,12 +140,13 @@ func (s *socket) Send(to identity.NodeID, m interface{}) {
 	if !exists {
 		s.lock.RLock()
 		address, ok := s.addresses[to]
+		log.Debugf("到%v的网络链路断开，重新建立", address)
 		s.lock.RUnlock()
 		if !ok {
 			log.Errorf("socket does not have address of node %s", to)
 			return
 		}
-		t = transport.NewTransport(address)
+		t = transport.NewTransport(address, s.conncurrentLimit)
 		err := utils.Retry(t.Dial, 100, time.Duration(50)*time.Millisecond)
 		if err != nil {
 			panic(err)
@@ -217,7 +225,7 @@ func (s *socket) Send2(to identity.NodeID, m interface{}) {
 			log.Errorf("socket does not have address of node %s", to)
 			return
 		}
-		t = transport.NewTransport(address2)
+		t = transport.NewTransport(address2, s.conncurrentLimit)
 		err := utils.Retry(t.Dial, 100, time.Duration(50)*time.Millisecond)
 		if err != nil {
 			panic(err)

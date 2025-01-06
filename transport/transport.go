@@ -44,7 +44,7 @@ type Transport interface {
 }
 
 // NewTransport creates new transport object with url
-func NewTransport(addr string) Transport {
+func NewTransport(addr string, ch chan struct{}) Transport {
 	if !strings.Contains(addr, "://") {
 		addr = *Scheme + "://" + addr
 	}
@@ -54,10 +54,11 @@ func NewTransport(addr string) Transport {
 	}
 
 	transport := &transport{
-		url:   uri,
-		send:  make(chan interface{}, 102400),
-		recv:  make(chan interface{}, 102400),
-		close: make(chan struct{}),
+		url:             uri,
+		send:            make(chan interface{}, 102400),
+		recv:            make(chan interface{}, 102400),
+		close:           make(chan struct{}),
+		concurrentLimit: ch,
 	}
 
 	switch uri.Scheme {
@@ -88,6 +89,7 @@ type transport struct {
 	totalSentBits    int64
 	totalRecvBits    int64
 	close            chan struct{}
+	concurrentLimit  chan struct{}
 }
 
 func (t *transport) GetUrl() string {
@@ -124,16 +126,22 @@ func (t *transport) Dial() error {
 		encoder := gob.NewEncoder(conn)
 		// 使用远程地址作为协程标识符
 		connName := conn.RemoteAddr().String()
-		num := 0
+		var num int32 = 0
 
 		defer conn.Close()
+		log.Debugf("Dial() --- 已连接，等待数据")
 		for m := range t.send {
-			log.Debugf("Dial() --- 准备发送到[%v]，发送数据为%T,t.send的当前待发送的数据有%v条 No.[%v]", connName, m, len(t.send), num)
+			log.Debugf("Dial() --- 收到数据，启动一个协程来发送")
+
+			// 确保释放并发限制
+
+			log.Debugf("Dial() --- 准备发送到[%v]，发送数据为%T,t.send的当前待发送的数据有%v条", connName, m, len(t.send))
 			err := encoder.Encode(&m)
 			if err != nil {
 				log.Errorf("Dial() --- 发送到[%v]，发送数据为%T err:[%v]", connName, m, err)
 			}
-			log.Debugf("Dial() --- 发送到[%v]成功, 发送数据为%T,准备写入本地缓冲区来获取发送的数据量 No.[%v]", connName, m, num)
+			<-t.concurrentLimit
+			log.Debugf("Dial() --- 发送到[%v]成功, 限流器大小[%v] 发送数据为%T,准备写入本地缓冲区来获取发送的数据量 No.[%v]", connName, len(t.concurrentLimit), m, num)
 			var buf bytes.Buffer
 			enc := gob.NewEncoder(&buf)
 			enc.Encode(&m)
@@ -215,14 +223,14 @@ func (t *tcp) Listen() {
 
 						log.Debugf("Listen() --- 当前协程接受了%v的 数据 %T，准备计算接受大小 No.[%v]", connName, m, num)
 						// 增加接收的数据量
-						var buf bytes.Buffer
-						enc := gob.NewEncoder(&buf)
-						enc.Encode(&m)
+						// var buf bytes.Buffer
+						// enc := gob.NewEncoder(&buf)
+						// enc.Encode(&m)
 
-						log.Debugf("Listen() --- 当前协程接受了%v的数据量为[%v]Byte No.[%v]", connName, buf.Len(), num)
+						// log.Debugf("Listen() --- 当前协程接受了%v的数据量为[%v]Byte No.[%v]", connName, buf.Len(), num)
 
 						t.recv <- m
-						t.totalRecvBits += int64(buf.Len()) * 8
+						//t.totalRecvBits += int64(buf.Len()) * 8
 						num++
 					}
 				}
