@@ -39,6 +39,8 @@ type Transport interface {
 
 	// Close closes send channel and stops listener
 	Close()
+
+	GetUrl() string
 }
 
 // NewTransport creates new transport object with url
@@ -52,7 +54,7 @@ func NewTransport(addr string) Transport {
 	}
 
 	transport := &transport{
-		uri:   uri,
+		url:   uri,
 		send:  make(chan interface{}, 102400),
 		recv:  make(chan interface{}, 102400),
 		close: make(chan struct{}),
@@ -78,7 +80,7 @@ func NewTransport(addr string) Transport {
 }
 
 type transport struct {
-	uri              *url.URL
+	url              *url.URL
 	send             chan interface{}
 	recv             chan interface{}
 	startSendingTime time.Time
@@ -86,6 +88,10 @@ type transport struct {
 	totalSentBits    int64
 	totalRecvBits    int64
 	close            chan struct{}
+}
+
+func (t *transport) GetUrl() string {
+	return t.url.Host
 }
 
 func (t *transport) Send(m interface{}) {
@@ -102,11 +108,11 @@ func (t *transport) Close() {
 }
 
 func (t *transport) Scheme() string {
-	return t.uri.Scheme
+	return t.url.Scheme
 }
 
 func (t *transport) Dial() error {
-	conn, err := net.Dial(t.Scheme(), t.uri.Host)
+	conn, err := net.Dial(t.Scheme(), t.url.Host)
 	if err != nil {
 		return err
 	}
@@ -116,16 +122,24 @@ func (t *transport) Dial() error {
 		// w := bufio.NewWriter(conn)
 		// codec := NewCodec(config.Codec, conn)
 		encoder := gob.NewEncoder(conn)
+		// 使用远程地址作为协程标识符
+		connName := conn.RemoteAddr().String()
+		num := 0
+
 		defer conn.Close()
 		for m := range t.send {
+			log.Debugf("Dial() --- 准备发送到[%v]，发送数据为%T,t.send的当前待发送的数据有%v条 No.[%v]", connName, m, len(t.send), num)
 			err := encoder.Encode(&m)
 			if err != nil {
-				log.Error(err)
+				log.Errorf("Dial() --- 发送到[%v]，发送数据为%T err:[%v]", connName, m, err)
 			}
+			log.Debugf("Dial() --- 发送到[%v]成功, 发送数据为%T,准备写入本地缓冲区来获取发送的数据量 No.[%v]", connName, m, num)
 			var buf bytes.Buffer
 			enc := gob.NewEncoder(&buf)
 			enc.Encode(&m)
 			t.totalSentBits += int64(buf.Len()) * 8
+			log.Debugf("Dial() --- 发送到[%v]的数据量,获取成功， 发送数据为%T,发送数据量为%v No.[%v]", connName, m, buf.Len(), num)
+			num++
 		}
 	}(conn)
 
@@ -146,16 +160,18 @@ func (t *transport) RecvBitsCount() int64 {
 	return rate
 }
 
-/******************************
+/*
+*****************************
 /*     TCP communication      *
-/******************************/
+/*****************************
+*/
 type tcp struct {
 	*transport
 }
 
 func (t *tcp) Listen() {
-	log.Debug("start listening ", t.uri.Port())
-	listener, err := net.Listen("tcp", ":"+t.uri.Port())
+	log.Debug("start listening ", t.url.Port())
+	listener, err := net.Listen("tcp", ":"+t.url.Port())
 	if err != nil {
 		log.Fatal("TCP Listener error: ", err)
 	}
@@ -172,62 +188,42 @@ func (t *tcp) Listen() {
 
 			// 使用远程地址作为协程标识符
 			connName := conn.RemoteAddr().String()
-			// 每个协程维护一个接收的数据量
-			var dataReceived int64
-			// 使用互斥锁来确保线程安全
-			var mu sync.Mutex
+			num := 0 //用来记录是第几个消息
 
 			go func(conn net.Conn, connName string) {
 				// 创建解码器
 				decoder := gob.NewDecoder(conn)
 				defer conn.Close()
 
-				// 定时打印接收的数据量
-				ticker := time.NewTicker(5 * time.Second)
-				defer ticker.Stop()
-
-				// 启动协程，定期打印接收到的数据量
-				go func() {
-					for {
-						select {
-						case <-ticker.C:
-							// 加锁来安全访问 dataReceived
-							mu.Lock()
-							log.Debugf("协程 %s 当前接收到的数据量: %d bytes", connName, dataReceived)
-							mu.Unlock()
-						}
-					}
-				}()
-
 				for {
 					select {
 					case <-t.close:
 						return
 					default:
+						log.Debugf("Listen() --- 当前协程正在监听来自 %v的 数据 No.[%v]", connName, num)
 						var m interface{}
 						err := decoder.Decode(&m)
 						if err != nil {
 							if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-								log.Warningf("Read timeout from %s", conn.RemoteAddr().String())
+								log.Warningf("Read timeout from %s for %T No.[%v]", conn.RemoteAddr().String(), m, num)
 								time.Sleep(1 * time.Second)
 								continue
 							}
-							log.Errorf("Decode error: %v", err)
+							log.Errorf("Decode error: [%v] from %v for type %T No.[%v]", err, connName, m, num)
 							return
 						}
 
+						log.Debugf("Listen() --- 当前协程接受了%v的 数据 %T，准备计算接受大小 No.[%v]", connName, m, num)
 						// 增加接收的数据量
 						var buf bytes.Buffer
 						enc := gob.NewEncoder(&buf)
 						enc.Encode(&m)
 
-						// 加锁来安全修改 dataReceived
-						mu.Lock()
-						dataReceived += int64(buf.Len()) // 增加接收的数据量
-						mu.Unlock()
+						log.Debugf("Listen() --- 当前协程接受了%v的数据量为[%v]Byte No.[%v]", connName, buf.Len(), num)
 
 						t.recv <- m
 						t.totalRecvBits += int64(buf.Len()) * 8
+						num++
 					}
 				}
 			}(conn, connName)
@@ -235,15 +231,17 @@ func (t *tcp) Listen() {
 	}(listener)
 }
 
-/******************************
+/*
+*****************************
 /*     UDP communication      *
-/******************************/
+/*****************************
+*/
 type udp struct {
 	*transport
 }
 
 func (u *udp) Dial() error {
-	addr, err := net.ResolveUDPAddr("udp", u.uri.Host)
+	addr, err := net.ResolveUDPAddr("udp", u.url.Host)
 	if err != nil {
 		log.Fatal("UDP resolve address error: ", err)
 	}
@@ -273,7 +271,7 @@ func (u *udp) Dial() error {
 }
 
 func (u *udp) Listen() {
-	addr, err := net.ResolveUDPAddr("udp", ":"+u.uri.Port())
+	addr, err := net.ResolveUDPAddr("udp", ":"+u.url.Port())
 	if err != nil {
 		log.Fatal("UDP resolve address error: ", err)
 	}
@@ -323,7 +321,7 @@ func (c *channel) Scheme() string {
 func (c *channel) Dial() error {
 	chansLock.RLock()
 	defer chansLock.RUnlock()
-	conn, ok := chans[c.uri.Host]
+	conn, ok := chans[c.url.Host]
 	if !ok {
 		return errors.New("server not ready")
 	}
@@ -339,7 +337,7 @@ func (c *channel) Dial() error {
 func (c *channel) Listen() {
 	chansLock.Lock()
 	defer chansLock.Unlock()
-	chans[c.uri.Host] = make(chan interface{}, 1024)
+	chans[c.url.Host] = make(chan interface{}, 1024)
 	c.startRecvTime = time.Now()
 	go func(conn <-chan interface{}) {
 		for {
@@ -350,5 +348,5 @@ func (c *channel) Listen() {
 				c.recv <- m
 			}
 		}
-	}(chans[c.uri.Host])
+	}(chans[c.url.Host])
 }

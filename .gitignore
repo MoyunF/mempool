@@ -32,3 +32,4 @@ bin/deploy/5nodes-test/logs/
 bin/deploy/5nodes-test/local_logs/
 bin/deploy/5nodes-test/server
 bin/deploy/5nodes-test/program.log
+bin/deploy/5nodes-test/glibc-2.34/

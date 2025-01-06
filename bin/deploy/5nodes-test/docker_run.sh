@@ -9,7 +9,7 @@ IMAGE_NAME="liuxin2629/mempool:latest"
 NETWORK_NAME="exp"
 
 # 起始IP地址 (根据你的网络配置调整)
-BASE_IP="172.18.0."
+BASE_IP="172.19.0."
 START_IP=2
 
 # 容器数量

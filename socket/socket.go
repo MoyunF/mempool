@@ -106,6 +106,13 @@ func (s *socket) RecvRate() float64 {
 func (s *socket) Send(to identity.NodeID, m interface{}) {
 	//log.Debugf("node %s send message %+v to %v", s.id, m, to)
 
+	// 深拷贝消息
+	clonedMessage, err := DeepCopy(m)
+	if err != nil {
+		log.Errorf("Failed to deep copy message: %v", err)
+		return
+	}
+	log.Debugf("Send() --- Deep Copy Message type: %T", clonedMessage) // 使用格式化打印数据类型
 	if s.crash {
 		return
 	}
@@ -152,7 +159,7 @@ func (s *socket) Send(to identity.NodeID, m interface{}) {
 		timer := time.NewTimer(randDelay)
 		go func() {
 			<-timer.C
-			t.Send(m)
+			t.Send(clonedMessage)
 		}()
 		return
 
@@ -161,11 +168,11 @@ func (s *socket) Send(to identity.NodeID, m interface{}) {
 		timer := time.NewTimer(time.Duration(delay) * time.Millisecond)
 		go func() {
 			<-timer.C
-			t.Send(m)
+			t.Send(clonedMessage)
 		}()
 		return
 	}
-	t.Send(m)
+	t.Send(clonedMessage)
 	//log.Debugf("[%v] message %v is sent to %v", s.id, m, to)
 }
 
@@ -175,6 +182,7 @@ func (s *socket) Recv() interface{} {
 	s.lock.RUnlock()
 	for {
 		m := t.Recv()
+		log.Debugf("Recv() ---  接受了信息 from %v ，Message type: %T", t.GetUrl(), m) // 使用格式化打印数据类型
 		if !s.crash {
 			return m
 		}
@@ -382,4 +390,25 @@ func (s *socket) Crash(t int) {
 			s.crash = false
 		}()
 	}
+}
+
+// DeepCopy 使用 gob 实现深拷贝
+func DeepCopy(src interface{}) (interface{}, error) {
+	// var buf bytes.Buffer
+	// enc := gob.NewEncoder(&buf)
+	// dec := gob.NewDecoder(&buf)
+
+	// // 将源数据编码到缓冲区
+	// if err := enc.Encode(&src); err != nil {
+	// 	return nil, err
+	// }
+
+	// // 创建目标变量存储解码后的数据
+	// dst := new(interface{})
+	// if err := dec.Decode(&dst); err != nil {
+	// 	return nil, err
+	// }
+
+	// return *dst, nil
+	return src, nil
 }

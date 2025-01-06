@@ -113,7 +113,7 @@ func (n *node) txn() {
 	}
 }
 
-//recv receives messages from socket and pass to message channel
+// recv receives messages from socket and pass to message channel
 func (n *node) recv() {
 	for {
 		m := n.Recv()
@@ -130,7 +130,7 @@ func (n *node) recv() {
 	}
 }
 
-//recv receives messages from socket and pass to message channel
+// recv receives messages from socket and pass to message channel
 func (n *node) recv2() {
 	for {
 		m := n.Recv2()

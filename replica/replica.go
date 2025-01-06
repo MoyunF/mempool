@@ -172,6 +172,7 @@ func NewReplica(id identity.NodeID, alg string, isByz bool) *Replica {
 	r.Register(blockchain.Ack{}, r.HandleAck)
 	r.Register(execute.ExecuteResult{}, r.handleResult)
 	r.Register(blockchain.Stable{}, r.HandleStable)
+
 	gob.Register(blockchain.Proposal{})
 	gob.Register(blockchain.MicroBlock{})
 	gob.Register(blockchain.Vote{})
@@ -555,7 +556,7 @@ func (r *Replica) observePool() {
 			for i := 0; i < config.GetConfig().Mb_broadcast; i++ {
 				r.mbBroadcast <- struct{}{}
 			}
-			time.Sleep(60 * time.Second)
+			time.Sleep(1 * time.Second)
 		}
 	}()
 
