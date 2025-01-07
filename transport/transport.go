@@ -189,6 +189,7 @@ func (t *tcp) Listen() {
 		defer listener.Close()
 		for {
 			conn, err := listener.Accept()
+
 			if err != nil {
 				log.Error("TCP Accept error: ", err)
 				continue
@@ -198,6 +199,7 @@ func (t *tcp) Listen() {
 			connName := conn.RemoteAddr().String()
 			num := 0 //用来记录是第几个消息
 
+			log.Debugf("Listen() --- 与 %v 建立连接成功", connName)
 			go func(conn net.Conn, connName string) {
 				// 创建解码器
 				decoder := gob.NewDecoder(conn)

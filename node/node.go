@@ -69,6 +69,10 @@ func (n *node) Retry(r message.Transaction) {
 	n.MessageChan <- r
 }
 
+func (n *node) DialToEveryOne() {
+	n.Socket.DialEveryNode()
+}
+
 // Register a handle function for each message type
 func (n *node) Register(m interface{}, f interface{}) {
 	t := reflect.TypeOf(m)

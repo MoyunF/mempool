@@ -1163,6 +1163,9 @@ func (r *Replica) Start() {
 		http.ListenAndServe("localhost:6060", nil) // 启动 pprof 服务器
 	}()
 
+	//连接所有节点
+	//r.Node.DialEveryNode()
+
 	go r.Run()
 	//go r.gossip()
 	go r.loadbalance() //负载均衡用

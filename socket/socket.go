@@ -52,6 +52,7 @@ type Socket interface {
 
 	SendRate() float64
 	RecvRate() float64
+	DialEveryNode() //连接所有节点
 }
 
 type socket struct {
@@ -397,6 +398,33 @@ func (s *socket) Crash(t int) {
 			<-timer.C
 			s.crash = false
 		}()
+	}
+}
+
+func (s *socket) DialEveryNode() {
+	for to := range s.addresses {
+		log.Debugf("to :[%v]", to.Node())
+		log.Debugf("s.id :[%v]", s.id.Node())
+		if to.Node() > s.id.Node() {
+			log.Debugf("to :[%v]", to.Node())
+			s.lock.RLock()
+			address, ok := s.addresses[to]
+			log.Debugf("正在与%v建立连接", address)
+			s.lock.RUnlock()
+			if !ok {
+				log.Errorf("socket does not have address of node %s", to)
+				return
+			}
+			t := transport.NewTransport(address, s.conncurrentLimit)
+			err := utils.Retry(t.Dial, 100, time.Duration(50)*time.Millisecond)
+			if err != nil {
+				panic(err)
+			}
+			s.lock.Lock()
+			s.nodes[to] = t
+			s.lock.Unlock()
+			log.Debugf("与%v建立连接成功", address)
+		}
 	}
 }
 
