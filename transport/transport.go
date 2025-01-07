@@ -74,6 +74,10 @@ func NewTransport(addr string, ch chan struct{}) Transport {
 		t := new(udp)
 		t.transport = transport
 		return t
+	case "quic":
+		t := new(quicTransport)
+		t.transport = transport
+		return t
 	default:
 		log.Fatalf("unknown scheme %s", uri.Scheme)
 	}

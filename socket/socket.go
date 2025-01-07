@@ -1,6 +1,8 @@
 package socket
 
 import (
+	"bytes"
+	"encoding/gob"
 	"math/rand"
 	"sync"
 	"time"
@@ -108,7 +110,7 @@ func (s *socket) RecvRate() float64 {
 }
 
 func (s *socket) Send(to identity.NodeID, m interface{}) {
-	//log.Debugf("node %s send message %+v to %v", s.id, m, to)
+	log.Debugf("node %s send message %+v to %v", s.id, m, to)
 	s.lock.RLock()
 	log.Debugf("Send() --- fetch a send token, 当前正在发送的有%v协程", len(s.conncurrentLimit))
 	s.lock.RUnlock()
@@ -430,21 +432,20 @@ func (s *socket) DialEveryNode() {
 
 // DeepCopy 使用 gob 实现深拷贝
 func DeepCopy(src interface{}) (interface{}, error) {
-	// var buf bytes.Buffer
-	// enc := gob.NewEncoder(&buf)
-	// dec := gob.NewDecoder(&buf)
+	var buf bytes.Buffer
+	enc := gob.NewEncoder(&buf)
+	dec := gob.NewDecoder(&buf)
 
-	// // 将源数据编码到缓冲区
-	// if err := enc.Encode(&src); err != nil {
-	// 	return nil, err
-	// }
+	// 将源数据编码到缓冲区
+	if err := enc.Encode(&src); err != nil {
+		return nil, err
+	}
 
-	// // 创建目标变量存储解码后的数据
-	// dst := new(interface{})
-	// if err := dec.Decode(&dst); err != nil {
-	// 	return nil, err
-	// }
+	// 创建目标变量存储解码后的数据
+	dst := new(interface{})
+	if err := dec.Decode(&dst); err != nil {
+		return nil, err
+	}
 
-	// return *dst, nil
-	return src, nil
+	return *dst, nil
 }
